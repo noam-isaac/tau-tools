@@ -5,11 +5,12 @@ This file has been created by inspecting the network requests when accessing htt
 
 import json
 import math
+import re
 import sys
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
-from tau_tools.logging import progress, setup_logging, log
+from tau_tools.logging import log, progress, setup_logging
 from tau_tools.utilities import request
 
 
@@ -182,7 +183,7 @@ def get_plans(school: SchoolInfo) -> List[PlanInfo]:
 
     return [
         PlanInfo(
-            result["teur"],
+            re.sub(r"\s{2,}", " ", result["teur"]),
             result["tcid"],
             result["currentSafa"],
             result["shana"],
@@ -225,26 +226,32 @@ def get_plan(plan: PlanInfo, year=2024) -> Dict[str, Any]:
 
             total_hours_required = 0
             try:
-                total_hours_required = int(category["shaot"].split(" ")[1].split("-")[0]) # סה״כ 26-28 ש״ס -> 26
+                total_hours_required = int(
+                    category["shaot"].split(" ")[1].split("-")[0]
+                )  # סה״כ 26-28 ש״ס -> 26
             except:
                 pass
 
-            smallest_course_hours = math.inf # the number of hours in the smallest course in this category
+            smallest_course_hours = (
+                math.inf
+            )  # the number of hours in the smallest course in this category
 
             for course in category["kurs"]:
                 try:
-                    smallest_course_hours = min(smallest_course_hours, int(course["shaotuni"]))
+                    smallest_course_hours = min(
+                        smallest_course_hours, int(course["shaotuni"])
+                    )
                 except:
                     pass
                 try:
                     course_weight = int(course["mishkal"])
                 except ValueError:
                     course_weight = 0
-                
+
                 course_info = {}
                 course_info["id"] = course["kursid"]
                 course_info["weight"] = str(course_weight)
-                
+
                 category_courses[course["kursid"]] = course_info
 
             if smallest_course_hours == 0:
@@ -253,7 +260,10 @@ def get_plan(plan: PlanInfo, year=2024) -> Dict[str, Any]:
             if len(category_courses) != 0:
                 categories[part["teurrama"] + " - " + category_name] = {
                     "courses": category_courses,
-                    "count": min(math.ceil(total_hours_required / smallest_course_hours), len(category_courses)),
+                    "count": min(
+                        math.ceil(total_hours_required / smallest_course_hours),
+                        len(category_courses),
+                    ),
                 }
 
     return categories
@@ -281,7 +291,7 @@ def main(output_file_template="plans-{year}.json", year=2024):
                 except Exception as e:
                     log.warning(
                         f"Error fetching {plan.name} in {school.name}: [red]{e}[/red]",
-                        extra={"markup": True}
+                        extra={"markup": True},
                     )
                 progress.update(school_task_id, advance=1)
             progress.update(school_task_id, visible=False)
