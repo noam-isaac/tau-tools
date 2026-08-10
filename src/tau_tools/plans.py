@@ -213,10 +213,7 @@ def get_plan(plan: PlanInfo, year=2024) -> Dict[str, Any]:
     categories = {}
 
     for part in details["results"]["body"][0]["rama"]:
-        if "rama" not in part:
-            continue
-
-        for category in part["rama"]:
+        for category in part["rama"] if "rama" in part else [part]:
             if "kurs" not in category:
                 continue
 
