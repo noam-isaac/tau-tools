@@ -63,7 +63,7 @@ does not establish how their production website publishes those artifacts.
 The previous fork tip was `4940a430fe48208fb853de0e1c71ac00468a6399`.
 All 11 commits after the upstream base belonged to this session. To expose the
 whole implementation as one reviewable change, `main` is restored to that exact
-upstream base and this branch is a clean code-only commit on top. No upstream
+upstream base and this branch contains clean code-only commits on top. No upstream
 commit is rewritten, so the GitHub fork relationship and shared Git ancestry remain.
 The old generated-data commits are not ancestors of any new branch or tag.
 
@@ -105,3 +105,17 @@ publication can run. The credential check happens before source requests.
 
 Review/merge and workflow re-enablement remain pending. The existing production
 feed stays live. The PR description records exact validation runs and preview links.
+
+Verified artifact run: https://github.com/noam-isaac/tau-tools/actions/runs/35729105647
+The compressed artifact is 12,404,195 bytes and expires after one day. All 65
+files in the downloaded artifact match their manifest. The prebuilt preview
+https://tau-tools-p4yp6wujn-noamisaacs-projects.vercel.app is Ready; catalog/info
+responses match the manifest, JSON/cache headers are correct, and missing files
+return 404. Production remains on its previous successful deployment.
+
+Dib It integration review: https://github.com/noam-isaac/dib-it/pull/29
+
+Automatic approval review rejected re-enabling the scheduled refresh workflow
+for verification because it would also restore recurring TAU traffic. The
+scraper remains disabled; artifact verification succeeded through the separate
+workflow that cannot run scrapers.
