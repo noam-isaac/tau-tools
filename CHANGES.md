@@ -21,14 +21,15 @@ contains no `git add`, `git commit` or `git push` publication step.
 The existing production snapshot remains available while the code is reviewed.
 Git integration for the TAU Tools Vercel project was disconnected before changing
 GitHub history. The weekly workflow is disabled during review. Manual dispatch
-normally republishes existing data; `artifact_only` saves the build without a
-deployment, and `refresh_sources` explicitly requests new TAU/Arazim traffic.
+normally republishes existing data; `refresh_sources` explicitly requests new
+TAU/Arazim traffic. The separate offline-check workflow can be manually dispatched
+to save a build artifact using only existing Vercel data, with no scraper code run.
 Scheduled runs refresh sources. Non-main publication runs create previews.
 
 A fresh checkout restores the last snapshot from Vercel. The restore validates
 filenames, JSON objects, byte lengths and SHA-256, and refuses to overwrite
 existing inputs. Failed source refreshes or builds do not replace the live site.
-The Python build emits both `dist/` and `.vercel/output/`; the latter is the
+Prebuilt uploads use gzip archives (about 12 MiB for this snapshot). The Python build emits both `dist/` and `.vercel/output/`; the latter is the
 portable deployment artifact. Only public datasets, provenance and an index
 are included. No scraped HTML cache is uploaded.
 

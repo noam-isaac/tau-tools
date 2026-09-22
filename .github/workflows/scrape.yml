@@ -8,10 +8,6 @@ on:
         description: Fetch new data from TAU and Arazim (false republishes the existing snapshot)
         type: boolean
         default: false
-      artifact_only:
-        description: Save the build artifact without deploying (for pipeline verification)
-        type: boolean
-        default: false
 permissions:
   contents: read
 concurrency:
@@ -38,7 +34,6 @@ jobs:
           node-version: '24'
       - run: corepack enable
       - name: Check publication credentials before fetching any sources
-        if: github.event_name == 'schedule' || !inputs.artifact_only
         run: |
           test -n "$VERCEL_TOKEN"
           test -n "$VERCEL_ORG_ID"
@@ -66,15 +61,14 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Publish the artifact to Vercel
-        if: github.event_name == 'schedule' || !inputs.artifact_only
         run: |
           if [ -z "$VERCEL_TOKEN" ]; then
             echo '::error::Artifact saved. Set the VERCEL_TOKEN Actions secret to enable direct deployment.'
             exit 1
           fi
           if [ "$GITHUB_REF" = refs/heads/main ]; then
-            pnpm dlx vercel@59.25.0 deploy --prebuilt --prod --yes --token="$VERCEL_TOKEN" > deployment-url.txt
+            pnpm dlx vercel@59.25.0 deploy --prebuilt --archive=tgz --prod --yes --token="$VERCEL_TOKEN" > deployment-url.txt
           else
-            pnpm dlx vercel@59.25.0 deploy --prebuilt --yes --token="$VERCEL_TOKEN" > deployment-url.txt
+            pnpm dlx vercel@59.25.0 deploy --prebuilt --archive=tgz --yes --token="$VERCEL_TOKEN" > deployment-url.txt
           fi
           cat deployment-url.txt >> "$GITHUB_STEP_SUMMARY"

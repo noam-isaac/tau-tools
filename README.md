@@ -49,7 +49,10 @@ is disconnected, and `git.deploymentEnabled: false` prevents accidental Git buil
 if it is reconnected. The workflow has only `contents: read` permission and checkout
 does not persist Git credentials.
 
-Manual dispatch defaults to **reusing the published snapshot**, with no TAU or
+The offline-check workflow also supports manual artifact verification using only
+existing Vercel files. It has no schedule, scraping step or deployment credentials.
+
+Refresh-workflow manual dispatch defaults to **reusing the published snapshot**, with no TAU or
 Arazim requests. Branch runs create previews; `main` runs publish to production.
 Fetching fresh data requires selecting `refresh_sources`, or a scheduled run.
 The refresh workflow is paused for review of this migration; merging the PR alone
