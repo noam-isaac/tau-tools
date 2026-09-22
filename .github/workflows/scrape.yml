@@ -1,19 +1,80 @@
-name: Run All Scrapers
+name: Refresh public datasets
 on:
-    schedule:
-        - cron: "8 6 * * SUN,THU"
+  schedule:
+    - cron: '23 3 * * 0'
+  workflow_dispatch:
+    inputs:
+      refresh_sources:
+        description: Fetch new data from TAU and Arazim (false republishes the existing snapshot)
+        type: boolean
+        default: false
+      artifact_only:
+        description: Save the build artifact without deploying (for pipeline verification)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: public-data-refresh
+  cancel-in-progress: false
 jobs:
-    run-all-scrapers:
-        runs-on: ubuntu-latest
-        steps:
-            - uses: actions/checkout@v4
-            - name: Install pip depdencies
-              run: pip install requests colorama beautifulsoup4
-            - name: Run course scraper
-              run: python3 tau_tools/courses.py
-            - name: Run plan scraper
-              run: python3 tau_tools/plans.py
-            - uses: actions/upload-artifact@v4
-              with:
-                  name: scraped-data
-                  path: ./*.json
+  publish:
+    if: github.repository == 'noam-isaac/tau-tools'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: corepack enable
+      - name: Check publication credentials before fetching any sources
+        if: github.event_name == 'schedule' || !inputs.artifact_only
+        run: |
+          test -n "$VERCEL_TOKEN"
+          test -n "$VERCEL_ORG_ID"
+          test -n "$VERCEL_PROJECT_ID"
+      - run: python -m pip install .
+      - name: Check parsers and publication guards (offline)
+        run: |
+          python scripts/test-static.py
+          python scripts/test-refresh.py
+          python scripts/test-restore.py
+          test -z "$(git ls-files data snapshot.json)"
+      - name: Restore the last published snapshot from Vercel
+        run: python scripts/restore-snapshot.py
+      - name: Refresh from public sources
+        if: github.event_name == 'schedule' || inputs.refresh_sources
+        run: python scripts/refresh-data.py
+      - name: Build the validated static snapshot
+        run: python scripts/build-static.py
+      - name: Retain the build artifact outside Git
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-datasets-${{ github.run_id }}
+          path: .vercel/output
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+      - name: Publish the artifact to Vercel
+        if: github.event_name == 'schedule' || !inputs.artifact_only
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo '::error::Artifact saved. Set the VERCEL_TOKEN Actions secret to enable direct deployment.'
+            exit 1
+          fi
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            pnpm dlx vercel@59.25.0 deploy --prebuilt --prod --yes --token="$VERCEL_TOKEN" > deployment-url.txt
+          else
+            pnpm dlx vercel@59.25.0 deploy --prebuilt --yes --token="$VERCEL_TOKEN" > deployment-url.txt
+          fi
+          cat deployment-url.txt >> "$GITHUB_STEP_SUMMARY"

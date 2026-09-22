@@ -1,8 +1,20 @@
 import os
 import time
 from typing import Any, Dict, Optional
+from contextlib import nullcontext
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
+
+
+def new_session():
+    session = requests.Session()
+    session.mount("https://", HTTPAdapter(max_retries=Retry(
+        total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods={"GET"},
+    )))
+    return session
 
 
 def request(
@@ -33,11 +45,9 @@ def request(
             response_text = f.read()
         return response_text
 
-    response = (
-        s.request(method, url, json=json, data=data, headers=headers)
-        if s is not None
-        else requests.request(method, url, json=json, data=data, headers=headers)
-    )
+    with (nullcontext(s) if s is not None else new_session()) as session:
+        response = session.request(method, url, json=json, data=data, headers=headers, timeout=60)
+    response.raise_for_status()
     time.sleep(delay)
 
     if cache_key is not None:

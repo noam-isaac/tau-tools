@@ -22,6 +22,64 @@
 
 # Installation
 
+## This fork's static dataset deployment
+
+Generated JSON is **not stored in Git**. Git contains the library, refresh and
+validation scripts, and deployment configuration. Vercel stores the published
+static snapshot, and GitHub Actions retains each validated build as an artifact
+for one day. There is no scraper API and browsing Dib It does not run TAU requests.
+
+The configured weekly job (Sunday, 03:23 UTC) discovers the two newest academic
+years from TAU and fetches their schedules and exams, including annual courses.
+Historical courses, plans, grades, bidding data, prerequisites and exam links
+come from Arazim's public feeds. These sources have their own update cadence;
+download time alone is not evidence of freshness. The generated `/snapshot.json`
+records the last completed refresh, source, byte size and SHA-256 of each file.
+
+Publication restores the last snapshot from Vercel, refreshes in a temporary
+directory, validates the result, uploads an Actions artifact and deploys the
+prebuilt output directly to Vercel. Failed restore, refresh, validation or deployment
+leaves the existing production deployment live. Restored files must match the
+manifest's size and checksum; a concurrent source publication fails safely.
+Neither publication nor weekly refresh creates a Git commit.
+
+The workflow requires repository variables `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`
+and secret `VERCEL_TOKEN` (scoped to the TAU Tools Vercel project). Git integration
+is disconnected, and `git.deploymentEnabled: false` prevents accidental Git builds
+if it is reconnected. The workflow has only `contents: read` permission and checkout
+does not persist Git credentials.
+
+Manual dispatch defaults to **reusing the published snapshot**, with no TAU or
+Arazim requests. Branch runs create previews; `main` runs publish to production.
+Fetching fresh data requires selecting `refresh_sources`, or a scheduled run.
+The refresh workflow is paused for review of this migration; merging the PR alone
+does not re-enable it. The existing production snapshot remains available meanwhile.
+
+Offline checks (after installing this library):
+
+```sh
+python3 scripts/test-static.py
+python3 scripts/test-refresh.py
+python3 scripts/test-restore.py
+```
+
+To build an existing snapshot in a clean checkout without scraping:
+
+```sh
+python3 scripts/restore-snapshot.py
+python3 scripts/build-static.py
+```
+
+`data/`, `snapshot.json`, `dist/` and `.vercel/` are ignored. The restore command
+refuses to overwrite existing inputs. `scripts/refresh-data.py` contacts TAU and
+Arazim; do not run it merely to test deployment. The original bootstrap script
+imports Arazim data and refuses to overwrite an existing `data/` directory.
+
+See [CHANGES.md](CHANGES.md) for the upstream comparison, history cleanup,
+validation and remaining scraper-load limitations.
+
+## Python library
+
 You can get the latest version of TAU Tools by running `pip install tau-tools`!
 
 # Features

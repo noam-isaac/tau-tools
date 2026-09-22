@@ -1,0 +1,116 @@
+"""Offline regression checks: python scripts/test-refresh.py."""
+
+import copy
+import runpy
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
+
+import requests
+from bs4 import BeautifulSoup
+from tau_tools.courses import GroupInfo, LessonInfo, get_school_courses, parse_exams, parse_result_page
+from tau_tools.utilities import request
+
+refresh_module = runpy.run_path(str(Path(__file__).with_name("refresh-data.py")))
+catalog = refresh_module["catalog"]
+exam = {"moed": "א", "date": "01/07/2027", "hour": "09:00", "type": "בחינה"}
+annual = GroupInfo("Annual", "12345678", "01", "Faculty", "Teacher", [exam],
+                   [LessonInfo("שנתי", "א", "10:00-12:00", "Building", "1", "שיעור")], {"שנתי": [exam]})
+spring = GroupInfo("Spring", "87654321", "01", "Faculty", "Teacher", [],
+                   [LessonInfo("ב'", "ב", "12:00-14:00", "Building", "2", "שיעור")], {"ב'": []})
+previous = {"12345678": {"exam_links": ["https://example.org/exam"], "exams": [exam]},
+            "87654321": {"exams": [exam]}, "00000000": {"name": "Removed"}}
+before = copy.deepcopy(previous)
+autumn = catalog([annual, spring], "a", previous)
+assert list(autumn) == ["12345678"]
+assert autumn["12345678"]["exams"] == [exam]
+assert autumn["12345678"]["exam_links"] == previous["12345678"]["exam_links"]
+assert catalog([annual, spring], "b", previous)["87654321"]["exams"] == []
+assert previous == before
+assert parse_exams(BeautifulSoup('<div class="msgerrs">אין נתונים</div>', "html.parser")) == []
+regular = '<table class="tableblds"><tr><th>מועד</th><th>תאריך</th><th>שעה</th><th>סוג מטלה</th></tr><tr><td>א</td><td>01/07/2027</td><td>09:00</td><td>בחינה</td></tr></table>'
+assert parse_exams(BeautifulSoup(regular, "html.parser")) == [exam]
+take_home = '<table class="tableblds"><tr><th>מועד</th><th>ת.לקיחת מטלה</th><th>שעה</th><th>ת.הגשת מטלה</th><th>שעה</th><th>סוג מטלה</th></tr><tr><td>א</td><td>01/07/2027</td><td>09:00</td><td>03/07/2027</td><td>12:00</td><td>עבודה</td></tr></table>'
+assert parse_exams(BeautifulSoup(take_home, "html.parser"))[0]["type"] == "עבודה (הגשה: 03/07/2027 12:00)"
+for invalid in ['<div class="msgerrs">אירעה שגיאה</div>', '<html>Unavailable</html>', regular.replace('01/07/2027', '31/02/2027')]:
+    try:
+        parse_exams(BeautifulSoup(invalid, "html.parser"))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("A source failure must not erase exams")
+response = Mock()
+response.raise_for_status.side_effect = requests.HTTPError("503")
+with patch('requests.Session.request', return_value=response), patch('builtins.open') as write:
+    try:
+        request('get', 'https://example.org', cache_key='failure-test')
+    except requests.HTTPError:
+        pass
+    else:
+        raise AssertionError("HTTP failures must abort refresh")
+    write.assert_not_called()
+
+download_response = Mock(status_code=200, content=b'{}')
+download_response.json.return_value = {}
+with patch('requests.Session.get', side_effect=[requests.ConnectionError('interrupted body'), download_response]) as get, patch('time.sleep'):
+    assert refresh_module['download']('bidding.json') == ('bidding.json', b'{}')
+    assert get.call_count == 2
+
+# A failure after downloading replacement files must leave the published inputs intact.
+with TemporaryDirectory() as directory:
+    root = Path(directory)
+    (root / "data").mkdir()
+    (root / "data/info.json").write_text('{"original": true}')
+    (root / "snapshot.json").write_text('{"original": true}')
+    response = Mock(text='<select name="lstYear"><option value="2025">2026</option><option value="2026">2027</option></select>')
+    download = lambda name: (name, json.dumps({"semesters": {"2027a": {}}} if name == 'info.json' else {}).encode())
+    refresh = refresh_module["refresh"]
+    with patch.dict(refresh.__globals__, {"ROOT": root, "download": download, "get_schools": lambda: [('lstDep1', ['01'])], "get_school_courses": Mock(side_effect=ValueError('source failure'))}), patch('requests.Session.get', return_value=response):
+        try:
+            refresh()
+        except ValueError as error:
+            assert str(error) == 'source failure'
+        else:
+            raise AssertionError('A failed source must abort publication')
+    assert (root / 'data/info.json').read_text() == '{"original": true}'
+    assert (root / 'snapshot.json').read_text() == '{"original": true}'
+
+# Pagination must finish before exam lookups, and dir1 must override hidden state.
+first = '<a id="next"></a><input type="hidden" name="dir1" value=""><a href="Syllabus_L.aspx?course=1"></a>'
+last = '<a href="Syllabus_L.aspx?course=2"></a>'
+events = []
+def source_request(*args, **kwargs):
+    events.append("page")
+    if len(events) == 1:
+        return first
+    assert kwargs["data"]["dir1"] == "1"
+    return last
+def parse_page(*args):
+    events.append("exams")
+    return []
+with patch('tau_tools.courses.request', side_effect=source_request), patch('tau_tools.courses.parse_result_page', side_effect=parse_page):
+    assert get_school_courses(0, ('lstDep6', ['03']), '2025') == []
+assert events == ['page', 'page', 'exams', 'exams']
+with patch('tau_tools.courses.request', return_value=first):
+    try:
+        get_school_courses(0, ('lstDep6', ['03']), '2025')
+    except ValueError as error:
+        assert 'repeated a page' in str(error)
+    else:
+        raise AssertionError('Repeated pagination must fail instead of looping')
+
+assert parse_result_page(BeautifulSoup('<div class="msgerrs">אין נתונים מתאימים למאפייני החיפוש</div>', 'html.parser'), '2025') == []
+for page in ['<html>Unavailable</html>', '<form id="frmgrid"><table dir="rtl"></table></form>']:
+    try:
+        parse_result_page(BeautifulSoup(page, 'html.parser'), '2025')
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('An unknown empty response must not erase courses')
+# TAU uses a six-column take-home header even when one sitting omits deadline cells.
+mixed = take_home.replace('<tr><td>א</td>', '<tr><td>ב</td>').replace('</table>', '<tr><td>א</td><td>05/02/2026</td><td>09:00</td><td>בחינת בית</td></tr></table>')
+assert parse_exams(BeautifulSoup(mixed, 'html.parser'))[-1] == {
+    "moed": "א", "date": "05/02/2026", "hour": "09:00", "type": "בחינת בית",
+}
+print("Refresh regression checks passed")
