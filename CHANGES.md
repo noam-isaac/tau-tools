@@ -93,8 +93,8 @@ not recorded. No new TAU requests are made to verify this storage migration.
 ## Verification and activation
 
 Offline parser, failed-publication, build-output and restore checks are run locally
-and in PR CI. The existing 65-file snapshot is used for artifact/preview verification;
-byte lengths and SHA-256 values must match its manifest.
+and in PR CI. The current 66-file snapshot includes annual classification/exams alongside the
+65 existing datasets; byte lengths and SHA-256 values must match its manifest.
 
 Automatic deployment needs the repository secret `VERCEL_TOKEN` and variables
 `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID`. The variables are configured. The logged-in
@@ -106,12 +106,13 @@ publication can run. The credential check happens before source requests.
 Review/merge and workflow re-enablement remain pending. The existing production
 feed stays live. The PR description records exact validation runs and preview links.
 
-Verified artifact run: https://github.com/noam-isaac/tau-tools/actions/runs/35729105647
+Earlier 65-file artifact verification (22 September):
+https://github.com/noam-isaac/tau-tools/actions/runs/35729105647
 The compressed artifact is 12,404,195 bytes and expires after one day. All 65
 files in the downloaded artifact match their manifest. The prebuilt preview
 https://tau-tools-p4yp6wujn-noamisaacs-projects.vercel.app is Ready; catalog/info
 responses match the manifest, JSON/cache headers are correct, and missing files
-return 404. Production remains on its previous successful deployment.
+return 404. That verification left production on its previous deployment.
 
 Dib It integration review: https://github.com/noam-isaac/dib-it/pull/29
 
@@ -137,3 +138,9 @@ Small test-only excerpts replace tests' implicit dependency on the production
 fallback. The old deployed app's data branch is frozen during the release transition.
 The new annual artifact was seeded from the existing verified snapshots, with no
 new TAU requests and no artificial refresh timestamp.
+
+The 66-file preview is
+https://tau-tools-6f88aet6r-noamisaacs-projects.vercel.app. Its annual JSON matches
+the saved migration input byte for byte (329,434 bytes). The data-only addition
+was published to the existing feed; the Dib It application remains unchanged
+pending PR review. Both scraper schedules remain disabled.
