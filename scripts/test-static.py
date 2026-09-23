@@ -12,6 +12,10 @@ with TemporaryDirectory() as directory:
     for name, value in {"info": {"semesters": {"2027a": {}}}, "courses": {}, "courses-2027a": {}}.items():
         (root / "data" / f"{name}.json").write_text(json.dumps(value))
     (root / "snapshot.json").write_text(json.dumps({"downloadedAt": "<test>"}))
+    (root / "data/annual-groups.json").write_text(json.dumps({"version": 1, "years": {"2027": {
+        "source": "https://www.ims.tau.ac.il/Tal/KR/Search_P.aspx", "filter": "ckSem=0",
+        "verifiedAt": "2026-09-18", "groups": {"12345678": ["01"]},
+    }}}))
     build(root)
     assert (root / "dist/data/info.json").read_bytes() == (root / "data/info.json").read_bytes()
     assert "&lt;test&gt;" in (root / "dist/index.html").read_text()

@@ -20,6 +20,7 @@ jobs:
       - run: |
           python scripts/test-static.py
           python scripts/test-refresh.py
+          python -m tau_tools.annual --self-test
           python scripts/test-restore.py
           test -z "$(git ls-files data snapshot.json)"
   artifact:

@@ -27,7 +27,7 @@ def restore(root=ROOT):
     with TemporaryDirectory(dir=root) as directory:
         staging = Path(directory)
         for name, metadata in files.items():
-            if not re.fullmatch(r"(?:info|courses|grades|bidding|courses-\d{4}[ab]|plans-\d{4})\.json", name):
+            if not re.fullmatch(r"(?:info|courses|grades|bidding|annual-groups|courses-\d{4}[ab]|plans-\d{4})\.json", name):
                 raise ValueError(f"Unexpected dataset: {name}")
             content = download("/data/" + name)
             if len(content) != metadata["bytes"] or hashlib.sha256(content).hexdigest() != metadata["sha256"]:

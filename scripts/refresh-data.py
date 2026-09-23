@@ -20,6 +20,7 @@ import requests
 from bs4 import BeautifulSoup
 from tau_tools.courses import get_school_courses, get_schools
 from tau_tools.collect import main as collect
+from tau_tools.annual import refresh as refresh_annual
 from tau_tools.utilities import new_session
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -108,6 +109,10 @@ def refresh():
                     target = data / f"courses-{year}{semester}.json"
                     previous = json.loads(target.read_text()) if target.exists() else {}
                     target.write_text(json.dumps(catalog(groups, semester, previous), ensure_ascii=False))
+                refresh_annual([year], data / "annual-groups.json", feed=True, prefetched={
+                    (g.id, g.group): g.exams_by_semester["שנתי"]
+                    for g in groups if "שנתי" in g.exams_by_semester
+                })
                 info = {**info, "semesters": {**info["semesters"], **{f"{year}{s}": info["semesters"].get(f"{year}{s}", {}) for s in ("a", "b")}}}
             (data / "info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n")
             os.chdir(data)
@@ -115,7 +120,7 @@ def refresh():
         finally:
             os.chdir(previous_directory)
         completed = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        direct_files = {f"courses-{y}{s}.json" for y in years for s in ("a", "b")}
+        direct_files = {"annual-groups.json", *{f"courses-{y}{s}.json" for y in years for s in ("a", "b")}}
         snapshot = {
             "source": "https://arazim-project.com/data/",
             "downloadedAt": started,

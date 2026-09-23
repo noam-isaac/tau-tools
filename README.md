@@ -63,6 +63,7 @@ Offline checks (after installing this library):
 ```sh
 python3 scripts/test-static.py
 python3 scripts/test-refresh.py
+python3 -m tau_tools.annual --self-test
 python3 scripts/test-restore.py
 ```
 
@@ -80,6 +81,23 @@ imports Arazim data and refuses to overwrite an existing `data/` directory.
 
 See [CHANGES.md](CHANGES.md) for the upstream comparison, history cleanup,
 validation and remaining scraper-load limitations.
+
+### Annual data ownership
+
+`/data/annual-groups.json` is part of the same validated snapshot. The
+`tau_tools.annual` module was moved from Dib It, with its offline checks. It uses
+TAU's explicit annual-only search (`ckSem=0`), refreshes the newest two years in
+the weekly pipeline and retains historical years. It reuses exam results already
+fetched by the course scraper; any missing annual exam pages are fetched
+sequentially, with a one-second delay. Both paths share the exam-table parser.
+
+Classification and exam verification timestamps are independent. Partial source
+failures retain the old values/timestamps and record failure metadata. Unknown
+first-time years are not fabricated. The build requires a valid versioned annual
+feed. A failed full catalog refresh still prevents publication of the whole snapshot.
+Dib It only consumes/validates/caches this feed; it no longer bundles the dataset
+or owns its generator. Initial migration reuses already verified data without
+claiming a new scrape or advancing source verification dates.
 
 ## Python library
 

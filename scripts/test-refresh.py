@@ -114,3 +114,21 @@ assert parse_exams(BeautifulSoup(mixed, 'html.parser'))[-1] == {
     "moed": "א", "date": "05/02/2026", "hour": "09:00", "type": "בחינת בית",
 }
 print("Refresh regression checks passed")
+
+# The complete publication owns annual data and reuses exams from the catalog pass.
+with TemporaryDirectory() as directory:
+    root = Path(directory)
+    (root / 'data').mkdir()
+    historical = {"source": refresh_module['TAU'], "filter": "ckSem=0", "verifiedAt": "2025-09-01", "groups": {"12345678": ["01"]}}
+    (root / 'data/annual-groups.json').write_text(json.dumps({"version": 1, "years": {"2025": historical}}))
+    response = Mock(text='<select name="lstYear"><option value="2025">2026</option><option value="2026">2027</option></select>')
+    download = lambda name: (name, json.dumps({"semesters": {"2027a": {}}} if name == 'info.json' else {}).encode())
+    refresh = refresh_module['refresh']
+    with patch.dict(refresh.__globals__, {"ROOT": root, "download": download, "get_schools": lambda: [('lstDep1', ['01'])], "get_school_courses": lambda *args: [annual]}), patch('requests.Session.get', return_value=response), patch('tau_tools.annual.collect', return_value={annual.id: [annual.group]}), patch('urllib.request.urlopen', side_effect=AssertionError('Exam already fetched')):
+        refresh()
+    feed = json.loads((root / 'data/annual-groups.json').read_text())
+    assert feed['years']['2025'] == historical
+    assert set(feed['years']) == {'2025', '2026', '2027'}
+    assert feed['years']['2027']['exams'][annual.id]['groups']['01'] == [exam]
+    assert 'annual-groups.json' in json.loads((root / 'snapshot.json').read_text())['files']
+print('Combined catalog and annual publication checks passed')

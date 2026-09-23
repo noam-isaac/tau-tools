@@ -119,3 +119,21 @@ Automatic approval review rejected re-enabling the scheduled refresh workflow
 for verification because it would also restore recurring TAU traffic. The
 scraper remains disabled; artifact verification succeeded through the separate
 workflow that cannot run scrapers.
+
+## Annual data migration (23 September 2026)
+
+Moved the existing annual-classification/exam generator and self-tests out of
+Dib It into `src/tau_tools/annual.py`. The weekly refresh writes
+`data/annual-groups.json` into the same snapshot and artifact as the catalogs.
+Year discovery comes from the Tools pipeline, without reading Dib It source files.
+The exam parser is shared with `courses.py`, and already-fetched annual exam
+results are reused; missing results use sequential requests with a one-second delay.
+Historical years and last-known timestamps survive partial failures.
+
+Dib It's scraper, daily writer and bundled annual JSON are removed on its review
+branch. The browser reads `/data/annual-groups.json`, preserves validated local
+cache and leaves edits pending when a cold start cannot obtain classification.
+Small test-only excerpts replace tests' implicit dependency on the production
+fallback. The old deployed app's data branch is frozen during the release transition.
+The new annual artifact was seeded from the existing verified snapshots, with no
+new TAU requests and no artificial refresh timestamp.
