@@ -4,8 +4,9 @@ import html
 import json
 import re
 import shutil
-from datetime import date
 from pathlib import Path
+
+from tau_tools.validation import validate_calendar, validate_dataset
 
 
 def build(root):
@@ -14,27 +15,16 @@ def build(root):
     for path in files:
         if not re.fullmatch(r"(?:info|courses|grades|bidding|annual-groups|courses-\d{4}[ab]|plans-\d{4})\.json", path.name):
             raise ValueError(f"Unexpected public dataset: {path.name}")
-        if not isinstance(json.loads(path.read_text()), dict):
-            raise ValueError(f"Expected a JSON object: {path.name}")
+        validate_dataset(path.stem, json.loads(path.read_text()))
     info = json.loads((data / "info.json").read_text())
     semesters = info["semesters"]
     if not semesters or not all(re.fullmatch(r"\d{4}[ab]", semester) for semester in semesters):
         raise ValueError("Invalid semester index")
-    for name in ["courses.json", "annual-groups.json", *[f"courses-{semester}.json" for semester in semesters]]:
+    for name in ["courses.json", "annual-groups.json", "grades.json", "bidding.json", *[f"courses-{semester}.json" for semester in semesters]]:
         if not (data / name).is_file():
             raise ValueError(f"Missing indexed dataset: {name}")
-    annual = json.loads((data / "annual-groups.json").read_text())
-    if annual.get("version") != 1 or not isinstance(annual.get("years"), dict) or not annual["years"]:
-        raise ValueError("Invalid annual-course feed")
-    for year, entry in annual["years"].items():
-        if (not re.fullmatch(r"\d{4}", year) or entry.get("source") != "https://www.ims.tau.ac.il/Tal/KR/Search_P.aspx"
-                or entry.get("filter") != "ckSem=0" or not isinstance(entry.get("groups"), dict) or not entry["groups"]
-                or any(not re.fullmatch(r"\d{8}", course) or not isinstance(groups, list) or not groups
-                       or any(not isinstance(group, str) or not re.fullmatch(r"\d{2}", group) for group in groups)
-                       for course, groups in entry["groups"].items())):
-            raise ValueError(f"Invalid annual classification: {year}")
-        date.fromisoformat(entry["verifiedAt"])
     snapshot = json.loads((root / "snapshot.json").read_text())
+    validate_calendar(info, [f"{year}{semester}" for year in snapshot.get("tauAcademicYears", []) for semester in ("a", "b")])
     refresh_status = ("Last successful refresh: " + html.escape(snapshot["lastSuccessfulRefresh"])) if snapshot.get("lastSuccessfulRefresh") else "The first automatic refresh has not completed; the initial Arazim snapshot is still served."
     output = root / "dist"
     if output.exists():

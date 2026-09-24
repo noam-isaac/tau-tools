@@ -22,6 +22,7 @@ from tau_tools.courses import get_school_courses, get_schools
 from tau_tools.collect import main as collect
 from tau_tools.annual import refresh as refresh_annual
 from tau_tools.utilities import new_session
+from tau_tools.validation import validate_calendar
 
 ROOT = Path(__file__).resolve().parents[1]
 TAU = "https://www.ims.tau.ac.il/Tal/KR/Search_P.aspx"
@@ -68,14 +69,22 @@ def refresh():
     semesters = info["semesters"]
     if not isinstance(semesters, dict) or not semesters or any(not re.fullmatch(r"\d{4}[ab]", s) for s in semesters):
         raise ValueError("Invalid public semester index")
-    names = ["courses.json", "grades.json", "bidding.json",
-             *[f"courses-{s}.json" for s in semesters],
+    previous_snapshot = json.loads((ROOT / "snapshot.json").read_text()) if (ROOT / "snapshot.json").exists() else {}
+    previous_info = json.loads((ROOT / "data/info.json").read_text()) if (ROOT / "data/info.json").exists() else {}
+    info = {**info, "semesters": {
+        **previous_info.get("semesters", {}),
+        **{semester: {**previous_info.get("semesters", {}).get(semester, {}), **dates} for semester, dates in semesters.items()},
+    }}
+    # Do not advertise or scrape a new semester until its source calendar is complete.
+    validate_calendar(info, [f"{year}{s}" for year in years for s in ("a", "b")])
+    names = ["grades.json", "bidding.json",
+             *[f"courses-{s}.json" for s in semesters
+               if s[:4] in {str(year) for year in years} or not (ROOT / "data" / f"courses-{s}.json").exists()],
              *[f"plans-{y}.json" for y in sorted({s[:4] for s in semesters})]]
     with ThreadPoolExecutor(max_workers=4) as pool:
         downloads = [("info.json", info_bytes), *pool.map(download, names)]
     if any(content is None and (ROOT / "data" / name).exists() for name, content in downloads):
         raise ValueError("A previously published study-plan feed disappeared; retain the previous snapshot")
-    os.environ["TAU_TOOLS_FORCE_FETCH"] = "1"
     with TemporaryDirectory() as directory:
         staging = Path(directory)
         data = staging / "data"
@@ -101,8 +110,9 @@ def refresh():
                         raise
                     print(f"{year} {school}: {len(result)} groups", flush=True)
                     return result
-                with ThreadPoolExecutor(max_workers=4) as pool:
-                    groups = [g for school_groups in pool.map(read_search, enumerate(searches)) for g in school_groups]
+                # Sequential searches stop at the first failure. Fresh staging also lets
+                # the existing HTTP cache reuse repeated exam requests within this run.
+                groups = [g for school_groups in map(read_search, enumerate(searches)) for g in school_groups]
                 if not groups or any(not re.fullmatch(r"\d{8}", g.id) or not re.fullmatch(r"\d{2}", g.group) for g in groups):
                     raise ValueError(f"Empty or invalid TAU course catalog for {year}")
                 for semester in ("a", "b"):
@@ -113,7 +123,6 @@ def refresh():
                     (g.id, g.group): g.exams_by_semester["שנתי"]
                     for g in groups if "שנתי" in g.exams_by_semester
                 })
-                info = {**info, "semesters": {**info["semesters"], **{f"{year}{s}": info["semesters"].get(f"{year}{s}", {}) for s in ("a", "b")}}}
             (data / "info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n")
             os.chdir(data)
             collect()
@@ -132,7 +141,7 @@ def refresh():
             "files": {p.name: {
                 "bytes": p.stat().st_size,
                 "sha256": hashlib.sha256(p.read_bytes()).hexdigest(),
-                "source": TAU if p.name in direct_files else ("derived" if p.name in ("courses.json", "info.json") else "https://arazim-project.com/data/"),
+                "source": TAU if p.name in direct_files else ("derived" if p.name in ("courses.json", "info.json") else previous_snapshot.get("files", {}).get(p.name, {}).get("source", "https://arazim-project.com/data/")),
             } for p in sorted(data.glob("*.json"))},
             "unavailablePlans": [name for name, content in downloads if content is None],
         }

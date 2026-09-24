@@ -47,10 +47,11 @@ are included. No scraped HTML cache is uploaded.
 - `scripts/import-published-data.py`: imports Arazim public JSON, validates JSON
   objects, retries interrupted downloads, records provenance and absent plans.
 - `scripts/refresh-data.py`: discovers the newest two academic years from TAU,
-  imports supplementary/history data from Arazim, refreshes TAU schedules/exams,
+  imports supplementary and missing historical data from Arazim, refreshes TAU schedules/exams,
   preserves supplementary course fields and validates in a temporary directory.
 - Build, restore and offline test scripts implement static publication and
-  regression checks. No new Python package dependency was added.
+  regression checks. `jsonschema` is the one new direct Python dependency, used to
+  validate the data contracts consumed by Dib It before publication.
 - README, ignore files and Vercel configuration document and support deployment.
   Generated JSON remains ignored; only the configuration `vercel.json` is tracked.
 
@@ -79,10 +80,12 @@ work in the existing local workspace remains untouched.
 
 ## Existing scraper load limitation
 
-The scraper still uses four parallel TAU workers and a per-exam delay of 0.2s;
-it has no global request limiter, global deduplication or request/byte accounting.
-These are pre-existing changes from this session, visible in this PR, and are
-not described as solved by the storage migration. The schedule remains paused.
+TAU school searches now run sequentially; a failure stops subsequent searches.
+A fresh staging directory enables the existing HTTP cache within each run,
+reusing repeated exam requests. The normal per-exam delay remains 0.2s; missing
+annual exam lookups remain sequential with a one-second delay. There is still
+no global request limiter or measured request/byte accounting. Arazim downloads
+use four workers. The schedule remains paused.
 
 The prior audit counted 21,890 completed group records in the successful run and
 32,374 across logged completed batches in all attempts. These are **not HTTP
@@ -144,3 +147,22 @@ https://tau-tools-6f88aet6r-noamisaacs-projects.vercel.app. Its annual JSON matc
 the saved migration input byte for byte (329,434 bytes). The data-only addition
 was published to the existing feed; the Dib It application remains unchanged
 pending PR review. Both scraper schedules remain disabled.
+
+## Review fixes (24 September 2026)
+
+- Preserve existing historical course files and their provenance at academic-year
+  rollover. Only missing history is downloaded; `courses.json` is rebuilt locally.
+- Stop TAU school searches at the first failure and reuse within-run HTTP cache.
+- Validate consumed nested data shapes before replacing build output. Invalid
+  records, including annual exam records, leave the prior snapshot intact.
+- Require complete calendar dates for refreshed years and the source-selected
+  current semester before school scraping. Preserve existing calendar fields
+  when an upstream record omits them; do not invent dates or a default semester.
+- Preserve classification failure markers across separate year refreshes; clear
+  a marker only when that year succeeds.
+- Remove the duplicate late credential check; retain the guard before traffic.
+
+Offline regressions cover each case. All 66 existing saved datasets also pass the
+new validation. No TAU requests were used for these checks. Dib It's corresponding
+PR consumes per-group annual exams and uses a seven-day freshness threshold;
+these are app-side corrections, not a new publication architecture.

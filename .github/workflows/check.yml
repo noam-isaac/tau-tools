@@ -33,6 +33,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - run: python -m pip install .
       - name: Restore only the existing Vercel snapshot (no scrapers)
         run: python scripts/restore-snapshot.py
       - run: python scripts/build-static.py

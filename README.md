@@ -31,10 +31,19 @@ for one day. There is no scraper API and browsing Dib It does not run TAU reques
 
 The configured weekly job (Sunday, 03:23 UTC) discovers the two newest academic
 years from TAU and fetches their schedules and exams, including annual courses.
-Historical courses, plans, grades, bidding data, prerequisites and exam links
-come from Arazim's public feeds. These sources have their own update cadence;
+Missing historical catalogs, plans, grades, bidding data, prerequisites and exam
+links come from Arazim's public feeds. Existing historical catalogs retain our last
+verified data when they leave the two-year refresh window. These sources have their own update cadence;
 download time alone is not evidence of freshness. The generated `/snapshot.json`
 records the last completed refresh, source, byte size and SHA-256 of each file.
+
+TAU school searches run sequentially and stop at the first failure. A fresh
+per-run cache reuses repeated exam requests. The pipeline requires complete,
+valid calendar dates for the two refreshed years and the source's current semester
+before scraping course data. A missing calendar blocks publication rather than
+creating empty dates; Arazim's `currentSemester` still determines the app default.
+Schema validation checks the fields consumed by Dib It, including nested exam,
+plan, grade and bidding records. Historical optional/missing fields remain valid.
 
 Publication restores the last snapshot from Vercel, refreshes in a temporary
 directory, validates the result, uploads an Actions artifact and deploys the
@@ -70,6 +79,7 @@ python3 scripts/test-restore.py
 To build an existing snapshot in a clean checkout without scraping:
 
 ```sh
+python3 -m pip install .
 python3 scripts/restore-snapshot.py
 python3 scripts/build-static.py
 ```

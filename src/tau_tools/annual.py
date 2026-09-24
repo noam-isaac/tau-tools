@@ -138,12 +138,13 @@ def refresh(years, target, feed=False, prefetched=None):
     if feed and previous is not None and (previous.get("version") != 1 or not isinstance(previous.get("years"), dict)):
         raise ValueError("Unsupported annual feed; preserve it for review")
     data = (previous["years"] if feed else previous) if previous is not None else {}
-    classification_failures = {}
+    classification_failures = dict(previous.get("classificationFailures", {})) if feed and previous else {}
     for year in years:
         before = data.get(str(year), {})
         try:
             classification = {"source": BASE + "Search_P.aspx", "filter": "ckSem=0",
                               "verifiedAt": datetime.date.today().isoformat(), "groups": collect(year)}
+            classification_failures = {key: value for key, value in classification_failures.items() if key != str(year)}
         except (OSError, ValueError) as error:
             print(f"Classification refresh failed for {year}: {error}", file=sys.stderr, flush=True)
             classification = {**before, "classificationFailedAt": timestamp()}
@@ -254,6 +255,12 @@ def self_test():
         partial_feed = json.loads(feed.read_text())
         assert "2029" in partial_feed["classificationFailures"]
         assert "2028" in partial_feed["years"] and "2029" not in partial_feed["years"]
+        with patch(__name__ + ".collect", return_value={"11111111": ["01"]}), patch(__name__ + ".collect_exams", return_value=result):
+            refresh([2028], feed, True)
+            assert json.loads(feed.read_text())["classificationFailures"] == partial_feed["classificationFailures"]
+            refresh([2029], feed, True)
+            assert not json.loads(feed.read_text())["classificationFailures"]
+
     print("PASS annual source: parsing, reused exam results, independent refreshes, per-course failure, cancellation, retained timestamps and atomic publication")
 
 

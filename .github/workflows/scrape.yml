@@ -63,10 +63,6 @@ jobs:
           retention-days: 1
       - name: Publish the artifact to Vercel
         run: |
-          if [ -z "$VERCEL_TOKEN" ]; then
-            echo '::error::Artifact saved. Set the VERCEL_TOKEN Actions secret to enable direct deployment.'
-            exit 1
-          fi
           if [ "$GITHUB_REF" = refs/heads/main ]; then
             pnpm dlx vercel@59.25.0 deploy --prebuilt --archive=tgz --prod --yes --token="$VERCEL_TOKEN" > deployment-url.txt
           else

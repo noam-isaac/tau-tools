@@ -1,6 +1,7 @@
 """Offline regression checks: python scripts/test-refresh.py."""
 
 import copy
+import os
 import runpy
 import json
 from pathlib import Path
@@ -14,6 +15,10 @@ from tau_tools.utilities import request
 
 refresh_module = runpy.run_path(str(Path(__file__).with_name("refresh-data.py")))
 catalog = refresh_module["catalog"]
+calendar = {"currentSemester": "2027a", "semesters": {
+    f"{year}{semester}": {"startDate": f"{year}-01-01", "endDate": f"{year}-06-01"}
+    for year in (2026, 2027) for semester in ("a", "b")
+}}
 exam = {"moed": "א", "date": "01/07/2027", "hour": "09:00", "type": "בחינה"}
 annual = GroupInfo("Annual", "12345678", "01", "Faculty", "Teacher", [exam],
                    [LessonInfo("שנתי", "א", "10:00-12:00", "Building", "1", "שיעור")], {"שנתי": [exam]})
@@ -64,17 +69,31 @@ with TemporaryDirectory() as directory:
     (root / "data/info.json").write_text('{"original": true}')
     (root / "snapshot.json").write_text('{"original": true}')
     response = Mock(text='<select name="lstYear"><option value="2025">2026</option><option value="2026">2027</option></select>')
-    download = lambda name: (name, json.dumps({"semesters": {"2027a": {}}} if name == 'info.json' else {}).encode())
+    download = lambda name: (name, json.dumps(calendar if name == 'info.json' else {}).encode())
     refresh = refresh_module["refresh"]
-    with patch.dict(refresh.__globals__, {"ROOT": root, "download": download, "get_schools": lambda: [('lstDep1', ['01'])], "get_school_courses": Mock(side_effect=ValueError('source failure'))}), patch('requests.Session.get', return_value=response):
+    scrape = Mock(side_effect=ValueError('source failure'))
+    with patch.dict(refresh.__globals__, {"ROOT": root, "download": download, "get_schools": lambda: [('lstDep1', ['01', '02', '03'])], "get_school_courses": scrape}), patch('requests.Session.get', return_value=response):
         try:
             refresh()
         except ValueError as error:
             assert str(error) == 'source failure'
         else:
             raise AssertionError('A failed source must abort publication')
+    assert scrape.call_count == 1, 'No later TAU searches after a source failure'
     assert (root / 'data/info.json').read_text() == '{"original": true}'
     assert (root / 'snapshot.json').read_text() == '{"original": true}'
+
+# Duplicate exam lookups in a fresh run reuse the first successful response.
+with TemporaryDirectory() as directory:
+    previous_directory = Path.cwd()
+    try:
+        os.chdir(directory)
+        with patch.dict(os.environ, {"TAU_TOOLS_FORCE_FETCH": ""}), patch('requests.Session.request', return_value=Mock(text='exam fixture')) as get:
+            assert request('get', 'https://example.org/exam', cache_key='exam-01-2027', delay=0) == 'exam fixture'
+            assert request('get', 'https://example.org/exam', cache_key='exam-01-2027', delay=0) == 'exam fixture'
+            assert get.call_count == 1
+    finally:
+        os.chdir(previous_directory)
 
 # Pagination must finish before exam lookups, and dir1 must override hidden state.
 first = '<a id="next"></a><input type="hidden" name="dir1" value=""><a href="Syllabus_L.aspx?course=1"></a>'
@@ -121,14 +140,40 @@ with TemporaryDirectory() as directory:
     (root / 'data').mkdir()
     historical = {"source": refresh_module['TAU'], "filter": "ckSem=0", "verifiedAt": "2025-09-01", "groups": {"12345678": ["01"]}}
     (root / 'data/annual-groups.json').write_text(json.dumps({"version": 1, "years": {"2025": historical}}))
+    old_catalog = {"00000000": {"name": "Preserved TAU history", "faculty": "Faculty", "groups": [], "exams": [exam]}}
+    old_bytes = json.dumps(old_catalog).encode()
+    (root / 'data/courses-2025a.json').write_bytes(old_bytes)
+    (root / 'snapshot.json').write_text(json.dumps({"files": {"courses-2025a.json": {"source": refresh_module['TAU']}}}))
+    historical_calendar = {**calendar, "semesters": {**calendar['semesters'], "2025a": {}}}
     response = Mock(text='<select name="lstYear"><option value="2025">2026</option><option value="2026">2027</option></select>')
-    download = lambda name: (name, json.dumps({"semesters": {"2027a": {}}} if name == 'info.json' else {}).encode())
+    download = Mock(side_effect=lambda name: (name, json.dumps(historical_calendar if name == 'info.json' else {}).encode()))
     refresh = refresh_module['refresh']
     with patch.dict(refresh.__globals__, {"ROOT": root, "download": download, "get_schools": lambda: [('lstDep1', ['01'])], "get_school_courses": lambda *args: [annual]}), patch('requests.Session.get', return_value=response), patch('tau_tools.annual.collect', return_value={annual.id: [annual.group]}), patch('urllib.request.urlopen', side_effect=AssertionError('Exam already fetched')):
         refresh()
+    assert (root / 'data/courses-2025a.json').read_bytes() == old_bytes
+    assert 'courses-2025a.json' not in [call.args[0] for call in download.call_args_list]
+    assert json.loads((root / 'snapshot.json').read_text())['files']['courses-2025a.json']['source'] == refresh_module['TAU']
     feed = json.loads((root / 'data/annual-groups.json').read_text())
     assert feed['years']['2025'] == historical
     assert set(feed['years']) == {'2025', '2026', '2027'}
     assert feed['years']['2027']['exams'][annual.id]['groups']['01'] == [exam]
     assert 'annual-groups.json' in json.loads((root / 'snapshot.json').read_text())['files']
 print('Combined catalog and annual publication checks passed')
+
+# Missing/new calendar metadata must stop before school or course scraping.
+for invalid in ({"semesters": {"2027a": {}}},
+                {**calendar, "currentSemester": "2099a"},
+                {**calendar, "semesters": {**calendar['semesters'], "2027b": {"startDate": "2027-02-31", "endDate": "2027-07-01"}}}):
+    with TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / 'data').mkdir()
+        schools = Mock(side_effect=AssertionError('Must validate dates before scraping schools'))
+        with patch.dict(refresh.__globals__, {"ROOT": root, "download": lambda name: (name, json.dumps(invalid).encode()), "get_schools": schools}), patch('requests.Session.get', return_value=response):
+            try:
+                refresh()
+            except ValueError as error:
+                assert 'calendar dates' in str(error)
+            else:
+                raise AssertionError('Incomplete calendar accepted')
+        schools.assert_not_called()
+print('Calendar guards passed')
