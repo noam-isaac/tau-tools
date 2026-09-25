@@ -5,3 +5,6 @@ __pycache__
 cache-*
 .ruff_cache
 .venv
+.vercel
+!vercel.json
+.env*

@@ -1,19 +1,74 @@
-name: Run All Scrapers
+name: Refresh public datasets
 on:
-    schedule:
-        - cron: "8 6 * * SUN,THU"
+  schedule:
+    # Sunday 00:23 Israel winter / 01:23 summer; once weekly.
+    - cron: '23 22 * * 6'
+  workflow_dispatch:
+    inputs:
+      refresh_sources:
+        description: Fetch new data from TAU (false republishes the existing snapshot)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: public-data-refresh
+  cancel-in-progress: false
 jobs:
-    run-all-scrapers:
-        runs-on: ubuntu-latest
-        steps:
-            - uses: actions/checkout@v4
-            - name: Install pip depdencies
-              run: pip install requests colorama beautifulsoup4
-            - name: Run course scraper
-              run: python3 tau_tools/courses.py
-            - name: Run plan scraper
-              run: python3 tau_tools/plans.py
-            - uses: actions/upload-artifact@v4
-              with:
-                  name: scraped-data
-                  path: ./*.json
+  publish:
+    if: github.repository == 'noam-isaac/tau-tools'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: corepack enable
+      - name: Check publication credentials before fetching any sources
+        run: |
+          test -n "$VERCEL_TOKEN"
+          test -n "$VERCEL_ORG_ID"
+          test -n "$VERCEL_PROJECT_ID"
+      - run: python -m pip install .
+      - name: Check parsers and publication guards (offline)
+        run: |
+          python scripts/test-static.py
+          python scripts/test-refresh.py
+          python -m tau_tools.annual --self-test
+          python scripts/test-restore.py
+          test -z "$(git ls-files data snapshot.json)"
+      - name: Restore the last published snapshot from Vercel
+        run: python scripts/restore-snapshot.py
+      - name: Refresh from public sources
+        if: github.event_name == 'schedule' || inputs.refresh_sources
+        run: |
+          python - <<'PYTHON'
+          from datetime import datetime, timezone
+          import subprocess
+          import sys
+          now = datetime.now(timezone.utc)
+          if 4 <= now.hour < 22:
+              sys.exit("Outside overnight scraping window (22:00-04:00 UTC); retain existing data")
+          seconds_left = (4 * 3600 - (now.hour * 3600 + now.minute * 60 + now.second)) % 86400
+          subprocess.run([sys.executable, "scripts/refresh-data.py"], check=True, timeout=seconds_left)
+          PYTHON
+      - name: Build the validated static snapshot
+        run: python scripts/build-static.py
+      - name: Publish the local build to Vercel
+        run: |
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            pnpm dlx vercel@59.25.0 deploy --prebuilt --archive=tgz --prod --yes --token="$VERCEL_TOKEN" > deployment-url.txt
+          else
+            pnpm dlx vercel@59.25.0 deploy --prebuilt --archive=tgz --yes --token="$VERCEL_TOKEN" > deployment-url.txt
+          fi
+          cat deployment-url.txt >> "$GITHUB_STEP_SUMMARY"

@@ -8,8 +8,10 @@ when accessing https://www.ims.tau.ac.il/Tal/KR/Search_P.aspx.
 import json
 import sys
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
+from itertools import groupby
 from typing import List, Optional, Tuple
 
 import requests
@@ -17,7 +19,7 @@ from bs4 import BeautifulSoup
 
 from tau_tools.logging import log, progress, setup_logging
 from tau_tools.prerequisites import get_prerequisites
-from tau_tools.utilities import request
+from tau_tools.utilities import new_session, request
 
 HEBREW_SEMESTERS = {"a": "א'", "b": "ב'"}
 
@@ -55,6 +57,7 @@ class GroupInfo:
     lecturer: str
     exams: List[ExamInfo]
     lessons: List[LessonInfo]
+    exams_by_semester: dict = field(default_factory=dict)
 
 
 def get_schools() -> List[Tuple[str, List[str]]]:
@@ -115,32 +118,36 @@ def get_exams(
         "html.parser",
     )
 
-    if result_soup.select(".msgerrs"):
-        # An error ocurred, assume there are no exams
+    try:
+        return parse_exams(result_soup)
+    except ValueError as error:
+        raise ValueError(f"{url}: {error}") from error
+
+
+def parse_exams(result_soup):
+    if any(element.get_text(strip=True) == "אין נתונים" for element in result_soup.select(".msgerrs")):
         return []
-
-    header_row, *all_rows = result_soup.select_one(".tableblds").select("tr")
-
-    assert (
-        str(header_row)
-        == '<tr class="listth"><th>מועד</th><th>תאריך</th><th>שעה</th><th>סוג מטלה</th></tr>'
-    )
-
-    result = []
-    for row in all_rows:
-        cols = row.select("td")
-        item = {
-            "moed": cols[0].text.strip(),
-            "date": cols[1].text.strip(),
-            "hour": cols[2].text.strip(),
-            "type": cols[3].text.strip(),
-        }
-        result.append(item)
-
-    return result
+    table = result_soup.select_one(".tableblds")
+    rows = [[cell.get_text(strip=True) for cell in row.select("th,td")] for row in table.select("tr")] if table else []
+    regular = ["מועד", "תאריך", "שעה", "סוג מטלה"]
+    take_home = ["מועד", "ת.לקיחת מטלה", "שעה", "ת.הגשת מטלה", "שעה", "סוג מטלה"]
+    if not rows or rows[0] not in (regular, take_home) or any(len(row) not in ({4, 6} if rows[0] == take_home else {4}) for row in rows[1:]):
+        raise ValueError("Unrecognized TAU exam response; retain the previous dataset")
+    for row in rows[1:]:
+        for date in ([row[1], row[3]] if len(row) == 6 else [row[1]]):
+            if date:
+                datetime.strptime(date, "%d/%m/%Y")
+    return [{"moed": row[0], "date": row[1], "hour": row[2], "type": row[-1] +
+             (f" (הגשה: {row[3]} {row[4]})" if len(row) == 6 and row[3] else "")}
+            for row in rows[1:]]
 
 
-def parse_result_page(result_soup: BeautifulSoup, year: str) -> List[GroupInfo]:
+def parse_result_page(result_soup: BeautifulSoup, year: str, s: Optional[requests.Session] = None) -> List[GroupInfo]:
+    if not result_soup.select('a[href*="Syllabus_L.aspx"]'):
+        if any(element.get_text(strip=True) == "אין נתונים מתאימים למאפייני החיפוש"
+               for element in result_soup.select(".msgerrs")):
+            return []
+        raise ValueError("Unrecognized empty TAU course response; retain the previous dataset")
     all_rows = result_soup.select_one("#frmgrid table[dir=rtl]").select("tr")
     all_rows = all_rows[1:]
     i = 0
@@ -151,7 +158,7 @@ def parse_result_page(result_soup: BeautifulSoup, year: str) -> List[GroupInfo]:
     while i < len(all_rows):
         try:
             if (
-                "kotcol" in all_rows[i]["class"]
+                "kotcol" in all_rows[i].get("class", [])
                 and len(list(all_rows[i].children)) == 2
             ):
                 # start of course
@@ -206,19 +213,12 @@ def parse_result_page(result_soup: BeautifulSoup, year: str) -> List[GroupInfo]:
                         semester_set.add(semester)
                     i += 1
 
-                # look up the exam if listing is only in one semester
-                course_exams = []
-                if len(semester_set) == 1 and course_lessons[0].semester in [
-                    "א'",
-                    "ב'",
-                ]:
-                    sem = ["א'", "ב'"].index(course_lessons[0].semester) + 1
-                    try:
-                        course_exams = get_exams(
-                            course_id, course_group, year, str(sem)
-                        )
-                    except Exception:
-                        pass
+                exam_semesters = {"א'": "1", "ב'": "2", "שנתי": "0"}
+                exams_by_semester = {
+                    semester: get_exams(course_id, course_group, year, exam_semesters[semester], s)
+                    for semester in semester_set if semester in exam_semesters
+                }
+                course_exams = [exam for exams in exams_by_semester.values() for exam in exams]
 
                 courses.append(
                     GroupInfo(
@@ -229,15 +229,17 @@ def parse_result_page(result_soup: BeautifulSoup, year: str) -> List[GroupInfo]:
                         course_lecturer,
                         course_exams,
                         course_lessons,
+                        exams_by_semester,
                     )
                 )
             else:
                 i += 1
-        except KeyError:
-            i += 1
+        except KeyError as error:
+            raise ValueError("Unrecognized TAU course row; retain the previous dataset") from error
         progress.update(page_task_id, completed=i)
     progress.update(page_task_id, visible=False)
-
+    if len(courses) != len(result_soup.select('a[href*="Syllabus_L.aspx"]')):
+        raise ValueError("Incomplete TAU course page; retain the previous dataset")
     return courses
 
 
@@ -250,7 +252,7 @@ def get_school_courses(
     school_select, school_options = school_details
     result = []
 
-    s = requests.Session()
+    s = new_session()
 
     payload = {
         "lstYear1": year,
@@ -288,19 +290,15 @@ def get_school_courses(
             "html.parser",
         )
 
+        # Finish the stateful search before slow exam requests can expire it.
+        pages = [search_result_page]
         while len(search_result_page.select("#next")) > 0:
             page_number += 1
-            result += parse_result_page(search_result_page, year)
-            log.info(
-                f"Finished parsing page {page_number} of school {school_index + 1}"
-            )
-
-            data = {"dir1": "1"}
-            for hidden_input in search_result_page.select("input[type=hidden]"):
-                try:
-                    data[hidden_input["name"]] = hidden_input["value"]
-                except KeyError:
-                    pass
+            data = {
+                **{element["name"]: element.get("value", "")
+                   for element in search_result_page.select("input[type=hidden][name]")},
+                "dir1": "1",
+            }
 
             search_result_page = BeautifulSoup(
                 request(
@@ -319,8 +317,13 @@ def get_school_courses(
                 "html.parser",
             )
 
-        # The final page
-        result += parse_result_page(search_result_page, year)
+            signature = lambda page: tuple(a["href"] for a in page.select('a[href*="Syllabus_L.aspx"]'))
+            if signature(search_result_page) in {signature(page) for page in pages}:
+                raise ValueError("TAU pagination repeated a page; retain the previous dataset")
+            pages.append(search_result_page)
+
+        print(f"{year} {school_select}: fetched {len(pages)} pages; reading exams", flush=True)
+        result += [group for page in pages for group in parse_result_page(page, year, s)]
 
         if task_id is not None:
             progress.update(task_id, advance=1)
@@ -329,6 +332,35 @@ def get_school_courses(
         progress.update(task_id, visible=False)
 
     return result
+
+
+def catalog(groups, semester, previous=None):
+    """Share assembly; a supplied snapshot preserves the publication policy."""
+    label = HEBREW_SEMESTERS[semester]
+    labels = (label, "שנתי") if previous is not None else (label,)
+    relevant = [g for g in groups if any(l.semester in labels for l in g.lessons)]
+
+    def record(course_id, values):
+        entries = list(values)
+        exams = [e for g in entries for key in (label, "שנתי") for e in g.exams_by_semester.get(key, [])]
+        exams = (list({json.dumps(e, sort_keys=True): e for e in exams}.values())
+                 if previous is not None else next((g.exams for g in reversed(entries) if g.exams), entries[0].exams))
+        return {
+            **(previous or {}).get(course_id, {}),
+            "name": entries[0].name,
+            "faculty": entries[0].faculty,
+            "exams": exams,
+            "groups": [{
+                "group": g.group,
+                "lecturer": g.lecturer,
+                "lessons": [{k: v for k, v in vars(l).items() if k != "semester"}
+                            for l in g.lessons if l.semester in labels],
+            } for g in entries],
+        }
+
+    courses = {course_id: record(course_id, values)
+            for course_id, values in groupby(sorted(relevant, key=lambda g: g.id), key=lambda g: g.id)}
+    return courses if previous is not None else {course_id: courses[course_id] for course_id in dict.fromkeys(g.id for g in relevant)}
 
 
 def main(
@@ -354,37 +386,7 @@ def main(
             year=str(int(year) + 1), semester=semester
         )
 
-        courses = {}
-        for group in groups:
-            group_lessons = [
-                lesson
-                for lesson in group.lessons
-                if lesson.semester == HEBREW_SEMESTERS[semester]
-            ]
-            if len(group_lessons) == 0:
-                continue
-
-            if group.id not in courses:
-                courses[group.id] = {
-                    "name": group.name,
-                    "faculty": group.faculty,
-                    "exams": group.exams,
-                    "groups": [],
-                }
-
-            if len(group.exams) != 0:
-                courses[group.id]["exams"] = group.exams
-
-            courses[group.id]["groups"].append(
-                {
-                    "group": group.group,
-                    "lecturer": group.lecturer,
-                    "lessons": [
-                        {k: v for k, v in lesson.__dict__.items() if k != "semester"}
-                        for lesson in group_lessons
-                    ],
-                }
-            )
+        courses = catalog(groups, semester)
 
         with progress:
             prerequisites_task_id = progress.add_task(

@@ -266,7 +266,7 @@ def get_plan(plan: PlanInfo, year=2024) -> Dict[str, Any]:
     return categories
 
 
-def main(output_file_template="plans-{year}.json", year=2024):
+def main(output_file_template="plans-{year}.json", year=2024, strict=False):
     result = {}
 
     schools = get_schools()
@@ -286,6 +286,8 @@ def main(output_file_template="plans-{year}.json", year=2024):
                     if len(plan_details) != 0:
                         result[school.name][plan.name] = plan_details
                 except Exception as e:
+                    if strict:
+                        raise
                     log.warning(
                         f"Error fetching {plan.name} in {school.name}: [red]{e}[/red]",
                         extra={"markup": True},
