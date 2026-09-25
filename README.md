@@ -29,13 +29,21 @@ validation scripts, and deployment configuration. Vercel stores the published
 static snapshot. GitHub Actions builds and deploys it directly, without uploading
 a separate Actions artifact. There is no scraper API and browsing Dib It does not run TAU requests.
 
-The configured weekly job (Sunday, 03:23 UTC) discovers the newest academic
-year from TAU and fetches their schedules and exams, including annual courses.
-Missing historical catalogs, plans, grades, bidding data, prerequisites and exam
-links come from Arazim's public feeds. Existing historical catalogs retain our last
+The configured weekly job (Saturday, 22:23 UTC) discovers the newest academic
+year from TAU and fetches its schedules, exams, prerequisites and study plans,
+including annual courses. The job reuses the original prerequisite/plan scrapers.
+Missing historical catalogs/plans, grades, bidding data, calendar metadata and
+exam links come from Arazim's public feeds. Existing historical catalogs retain our last
 verified data when they leave the refreshed year. These sources have their own update cadence;
 download time alone is not evidence of freshness. The generated `/snapshot.json`
 records the last completed refresh, source, byte size and SHA-256 of each file.
+
+The schedule is once weekly, below Arazim's published Sunday/Thursday cadence.
+Saturday 22:23 UTC is Sunday 00:23 in Israel in winter or 01:23 in summer.
+Source refreshes may start only between 22:00 and 04:00 UTC and are terminated
+at 04:00 UTC (06:00/07:00 Israel). This guard also applies to manual source
+refreshes and delayed scheduled jobs. A timeout leaves the previous deployment
+intact. Manual reuse-only publication does not scrape and is not time-restricted.
 
 TAU school searches run sequentially and stop at the first failure. A fresh
 per-run cache reuses repeated exam requests. The pipeline requires complete,

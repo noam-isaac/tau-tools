@@ -40,9 +40,9 @@ def build(root):
 <style>body{{font:18px/1.6 system-ui;max-width:50rem;margin:3rem auto;padding:0 1rem}}a{{color:#164bb5}}</style>
 <main><h1>TAU Tools datasets</h1>
 <p>Public JSON datasets hosted by <a href="https://github.com/noam-isaac/tau-tools">the TAU Tools fork</a>.</p>
-<p>Refreshes weekly on Sunday at 03:23 UTC. {refresh_status}</p>
-<p>The weekly job fetches course schedules and exams for the newest academic year directly from TAU.
-Historical data, study plans, grades, prerequisites and exam links use <a href="https://arazim-project.com">Arazim Project</a>'s published feeds.
+<p>Configured weekly refresh: Saturday 22:23 UTC, stopping by 04:00 UTC. {refresh_status}</p>
+<p>The weekly job fetches course schedules, exams, prerequisites and study plans for the newest academic year directly from TAU.
+Missing historical data, calendar metadata, grades, bidding and exam links use <a href="https://arazim-project.com">Arazim Project</a>'s published feeds.
 Feed download time: {html.escape(snapshot["downloadedAt"])}.</p>
 <p>Failed refreshes retain the last successful snapshot.
 <a href="https://github.com/noam-isaac/tau-tools/actions/workflows/scrape.yml">Refresh history</a></p>

@@ -21,6 +21,8 @@ from bs4 import BeautifulSoup
 from tau_tools.courses import get_school_courses, get_schools
 from tau_tools.collect import main as collect
 from tau_tools.annual import refresh as refresh_annual
+from tau_tools.plans import main as refresh_plans
+from tau_tools.prerequisites import get_prerequisites
 from tau_tools.utilities import new_session
 from tau_tools.validation import validate_calendar
 
@@ -80,11 +82,10 @@ def refresh():
     names = ["grades.json", "bidding.json",
              *[f"courses-{s}.json" for s in semesters
                if s[:4] in {str(year) for year in years} or not (ROOT / "data" / f"courses-{s}.json").exists()],
-             *[f"plans-{y}.json" for y in sorted({s[:4] for s in semesters})]]
+             *[f"plans-{y}.json" for y in sorted({s[:4] for s in semesters})
+               if int(y) not in years and not (ROOT / "data" / f"plans-{y}.json").exists()]]
     with ThreadPoolExecutor(max_workers=4) as pool:
         downloads = [("info.json", info_bytes), *pool.map(download, names)]
-    if any(content is None and (ROOT / "data" / name).exists() for name, content in downloads):
-        raise ValueError("A previously published study-plan feed disappeared; retain the previous snapshot")
     with TemporaryDirectory() as directory:
         staging = Path(directory)
         data = staging / "data"
@@ -118,7 +119,14 @@ def refresh():
                 for semester in ("a", "b"):
                     target = data / f"courses-{year}{semester}.json"
                     previous = json.loads(target.read_text()) if target.exists() else {}
-                    target.write_text(json.dumps(catalog(groups, semester, previous), ensure_ascii=False))
+                    courses = catalog(groups, semester, previous)
+                    courses = {course_id: {**course, "prerequisites": get_prerequisites(
+                        course_id, course["groups"][0]["group"], str(year - 1), semester,
+                    )} for course_id, course in courses.items()}
+                    target.write_text(json.dumps(courses, ensure_ascii=False))
+                refresh_plans(output_file_template=str(data / "plans-{year}.json"), year=year - 1, strict=True)
+                if not any(json.loads((data / f"plans-{year}.json").read_text()).values()):
+                    raise ValueError(f"Empty TAU study plans for {year}; retain the previous snapshot")
                 refresh_annual([year], data / "annual-groups.json", feed=True, prefetched={
                     (g.id, g.group): g.exams_by_semester["שנתי"]
                     for g in groups if "שנתי" in g.exams_by_semester
@@ -129,19 +137,20 @@ def refresh():
         finally:
             os.chdir(previous_directory)
         completed = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        plan_files = {f"plans-{y}.json" for y in years}
         direct_files = {"annual-groups.json", *{f"courses-{y}{s}.json" for y in years for s in ("a", "b")}}
         snapshot = {
             "source": "https://arazim-project.com/data/",
             "downloadedAt": started,
             "automaticRefresh": True,
-            "schedule": "Weekly, Sunday at 03:23 UTC",
+            "schedule": "Weekly, Saturday at 22:23 UTC; scraping stops by 04:00 UTC",
             "lastSuccessfulRefresh": completed,
             "tauAcademicYears": years,
-            "retainedCourseFields": ["prerequisites", "exam_links"],
+            "retainedCourseFields": ["exam_links"],
             "files": {p.name: {
                 "bytes": p.stat().st_size,
                 "sha256": hashlib.sha256(p.read_bytes()).hexdigest(),
-                "source": TAU if p.name in direct_files else ("derived" if p.name in ("courses.json", "info.json") else previous_snapshot.get("files", {}).get(p.name, {}).get("source", "https://arazim-project.com/data/")),
+                "source": "https://tochniot.tau.ac.il/graphql" if p.name in plan_files else TAU if p.name in direct_files else ("derived" if p.name in ("courses.json", "info.json") else previous_snapshot.get("files", {}).get(p.name, {}).get("source", "https://arazim-project.com/data/")),
             } for p in sorted(data.glob("*.json"))},
             "unavailablePlans": [name for name, content in downloads if content is None],
         }

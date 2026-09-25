@@ -4,9 +4,14 @@ import copy
 import os
 import runpy
 import json
+import textwrap
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, call
+from types import SimpleNamespace
+
+from tau_tools.plans import main as scrape_plans
 
 import requests
 from bs4 import BeautifulSoup
@@ -145,15 +150,41 @@ with TemporaryDirectory() as directory:
     for semester in ('2025a', '2026a', '2026b'):
         (root / f'data/courses-{semester}.json').write_bytes(old_bytes)
     (root / 'snapshot.json').write_text(json.dumps({"files": {"courses-2025a.json": {"source": refresh_module['TAU']}}}))
+    (root / 'data/plans-2026.json').write_text('{}')
     historical_calendar = {**calendar, "semesters": {**calendar['semesters'], "2025a": {}}}
     response = Mock(text='<select name="lstYear"><option value="2025">2026</option><option value="2026">2027</option></select>')
     download = Mock(side_effect=lambda name: (name, json.dumps(historical_calendar if name == 'info.json' else {}).encode()))
     refresh = refresh_module['refresh']
     scrape = Mock(return_value=[annual])
-    with patch.dict(refresh.__globals__, {"ROOT": root, "download": download, "get_schools": lambda: [('lstDep1', ['01'])], "get_school_courses": scrape}), patch('requests.Session.get', return_value=response), patch('tau_tools.annual.collect', return_value={annual.id: [annual.group]}) as classify, patch('urllib.request.urlopen', side_effect=AssertionError('Exam already fetched')):
+    prerequisites = Mock(side_effect=lambda course, group, year, semester: None if semester == 'a' else {"kind": "all", "courses": ["87654321"]})
+    def write_plans(output_file_template, year, strict):
+        assert strict and year == 2026
+        Path(output_file_template.format(year=year + 1)).write_text(json.dumps({"School": {"Program": {"Required": {"courses": {}, "count": 0}}}}))
+    plans = Mock(side_effect=write_plans)
+    with patch.dict(refresh.__globals__, {"ROOT": root, "download": download, "get_schools": lambda: [('lstDep1', ['01'])], "get_school_courses": scrape, "get_prerequisites": prerequisites, "refresh_plans": plans}), patch('requests.Session.get', return_value=response), patch('tau_tools.annual.collect', return_value={annual.id: [annual.group]}) as classify, patch('urllib.request.urlopen', side_effect=AssertionError('Exam already fetched')):
         refresh()
     scrape.assert_called_once_with(0, ('lstDep1', ['01']), '2026')
     classify.assert_called_once_with(2027)
+    assert prerequisites.call_args_list == [call(annual.id, '01', '2026', 'a'), call(annual.id, '01', '2026', 'b')]
+    assert plans.call_count == 1
+    assert json.loads((root / 'data/courses-2027a.json').read_text())[annual.id]['prerequisites'] is None
+    assert json.loads((root / 'data/courses-2027b.json').read_text())[annual.id]['prerequisites']['courses'] == ['87654321']
+    assert 'plans-2027.json' not in [item.args[0] for item in download.call_args_list]
+    assert 'plans-2026.json' not in [item.args[0] for item in download.call_args_list]
+    assert (root / 'data/plans-2026.json').read_text() == '{}'
+    assert json.loads((root / 'snapshot.json').read_text())['files']['plans-2027.json']['source'] == 'https://tochniot.tau.ac.il/graphql'
+    preserved = {path.name: path.read_bytes() for path in (root / 'data').glob('*.json')}
+    snapshot_before = (root / 'snapshot.json').read_bytes()
+    for failure in ('get_prerequisites', 'refresh_plans'):
+        with patch.dict(refresh.__globals__, {"ROOT": root, "download": download, "get_schools": lambda: [('lstDep1', ['01'])], "get_school_courses": scrape, "get_prerequisites": prerequisites, "refresh_plans": plans, failure: Mock(side_effect=ValueError('Source unavailable'))}), patch('requests.Session.get', return_value=response):
+            try:
+                refresh()
+            except ValueError as error:
+                assert str(error) == 'Source unavailable'
+            else:
+                raise AssertionError('Failed direct TAU data must block publication')
+        assert {path.name: path.read_bytes() for path in (root / 'data').glob('*.json')} == preserved
+        assert (root / 'snapshot.json').read_bytes() == snapshot_before
     for semester in ('2025a', '2026a', '2026b'):
         assert (root / f'data/courses-{semester}.json').read_bytes() == old_bytes
         assert f'courses-{semester}.json' not in [call.args[0] for call in download.call_args_list]
@@ -184,3 +215,37 @@ for invalid in ({"semesters": {"2027a": {}}},
                 raise AssertionError('Incomplete calendar accepted')
         schools.assert_not_called()
 print('Calendar guards passed')
+
+# Reuse the upstream plan scraper, but abort publication instead of silently skipping a failed plan.
+with TemporaryDirectory() as directory:
+    target = Path(directory) / 'plans-{year}.json'
+    school = SimpleNamespace(name='School')
+    plan = SimpleNamespace(id='1', name='Program')
+    with patch('tau_tools.plans.get_schools', return_value=[school]), patch('tau_tools.plans.get_plans', return_value=[plan]), patch('tau_tools.plans.get_plan', side_effect=ValueError('Plan unavailable')):
+        try:
+            scrape_plans(str(target), year=2026, strict=True)
+        except ValueError as error:
+            assert str(error) == 'Plan unavailable'
+        else:
+            raise AssertionError('Strict plan refresh must propagate source failures')
+    assert not list(Path(directory).glob('*.json'))
+print('Direct prerequisite and plan checks passed')
+
+# Exercise the actual workflow guard with a mocked clock/process: never start a scraper.
+workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/scrape.yml').read_text()
+assert "cron: '23 22 * * 6'" in workflow
+night_guard = textwrap.dedent(workflow.split("python - <<'PYTHON'\n", 1)[1].split('          PYTHON', 1)[0])
+for hour, allowed, seconds in [(21, False, None), (22, True, 21600), (0, True, 14400), (3, True, 3600), (4, False, None)]:
+    with patch('datetime.datetime') as clock, patch('subprocess.run') as run:
+        clock.now.return_value = datetime(2026, 9, 26, hour, tzinfo=timezone.utc)
+        try:
+            exec(compile(night_guard, '<workflow overnight guard>', 'exec'), {})
+        except SystemExit:
+            assert not allowed
+        else:
+            assert allowed
+        if allowed:
+            assert run.call_count == 1 and run.call_args.kwargs['timeout'] == seconds
+        else:
+            run.assert_not_called()
+print('Weekly overnight window checks passed')

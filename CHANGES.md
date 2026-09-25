@@ -184,3 +184,27 @@ catalogs and annual data retain their bytes/timestamps without TAU re-scraping.
 A mocked regression offers two years and verifies that course and annual searches
 run only for the newest one, while previous-year files remain untouched.
 No TAU requests, workflow activation or deployment were used for verification.
+
+## Restore direct prerequisites/plans; overnight schedule (25 September 2026)
+
+The current-year refresh now uses the original `get_prerequisites` function
+(one lookup per course/semester, first group, as upstream does) and `plans.main`.
+Current-year plans are no longer downloaded from Arazim; prerequisites from
+supplementary catalog downloads are replaced by the direct result, including
+confirmed empty results. Historical saved plans remain unchanged. Current plan
+provenance records TAU's GraphQL source. Grades, bidding, calendar metadata,
+exam links and missing historical files still use the public Arazim feed.
+
+`plans.main` gains an optional strict flag, enabled only by publication, so a
+failed plan lookup aborts instead of silently publishing an incomplete result.
+Its default CLI behavior remains unchanged. Prerequisite failures also abort
+publication, retaining the existing snapshot.
+
+Arazim's live public workflow was checked: `8 6 * * SUN,THU` (twice weekly).
+Our schedule remains once weekly and moves to `23 22 * * 6`: Sunday 00:23 Israel
+winter / 01:23 summer. Source refreshes are restricted to 22:00-04:00 UTC and
+subprocess timeout stops them by the end of that window, including delayed and
+manual source runs. The timeout fails publication and preserves the live data.
+The workflow remains paused for review; no live TAU scrape was used to test it.
+Offline checks cover direct lookups, historical preservation, failed-source
+atomicity, the strict plan path and the overnight guard boundaries.

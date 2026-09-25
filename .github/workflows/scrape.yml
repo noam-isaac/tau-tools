@@ -1,7 +1,8 @@
 name: Refresh public datasets
 on:
   schedule:
-    - cron: '23 3 * * 0'
+    # Sunday 00:23 Israel winter / 01:23 summer; once weekly.
+    - cron: '23 22 * * 6'
   workflow_dispatch:
     inputs:
       refresh_sources:
@@ -50,7 +51,17 @@ jobs:
         run: python scripts/restore-snapshot.py
       - name: Refresh from public sources
         if: github.event_name == 'schedule' || inputs.refresh_sources
-        run: python scripts/refresh-data.py
+        run: |
+          python - <<'PYTHON'
+          from datetime import datetime, timezone
+          import subprocess
+          import sys
+          now = datetime.now(timezone.utc)
+          if 4 <= now.hour < 22:
+              sys.exit("Outside overnight scraping window (22:00-04:00 UTC); retain existing data")
+          seconds_left = (4 * 3600 - (now.hour * 3600 + now.minute * 60 + now.second)) % 86400
+          subprocess.run([sys.executable, "scripts/refresh-data.py"], check=True, timeout=seconds_left)
+          PYTHON
       - name: Build the validated static snapshot
         run: python scripts/build-static.py
       - name: Publish the local build to Vercel
