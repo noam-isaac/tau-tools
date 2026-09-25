@@ -11,6 +11,7 @@ import urllib.parse
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from itertools import groupby
 from typing import List, Optional, Tuple
 
 import requests
@@ -333,6 +334,35 @@ def get_school_courses(
     return result
 
 
+def catalog(groups, semester, previous=None):
+    """Share assembly; a supplied snapshot preserves the publication policy."""
+    label = HEBREW_SEMESTERS[semester]
+    labels = (label, "שנתי") if previous is not None else (label,)
+    relevant = [g for g in groups if any(l.semester in labels for l in g.lessons)]
+
+    def record(course_id, values):
+        entries = list(values)
+        exams = [e for g in entries for key in (label, "שנתי") for e in g.exams_by_semester.get(key, [])]
+        exams = (list({json.dumps(e, sort_keys=True): e for e in exams}.values())
+                 if previous is not None else next((g.exams for g in reversed(entries) if g.exams), entries[0].exams))
+        return {
+            **(previous or {}).get(course_id, {}),
+            "name": entries[0].name,
+            "faculty": entries[0].faculty,
+            "exams": exams,
+            "groups": [{
+                "group": g.group,
+                "lecturer": g.lecturer,
+                "lessons": [{k: v for k, v in vars(l).items() if k != "semester"}
+                            for l in g.lessons if l.semester in labels],
+            } for g in entries],
+        }
+
+    courses = {course_id: record(course_id, values)
+            for course_id, values in groupby(sorted(relevant, key=lambda g: g.id), key=lambda g: g.id)}
+    return courses if previous is not None else {course_id: courses[course_id] for course_id in dict.fromkeys(g.id for g in relevant)}
+
+
 def main(
     output_file_template="courses-{year}{semester}.json",
     year=2024,
@@ -356,37 +386,7 @@ def main(
             year=str(int(year) + 1), semester=semester
         )
 
-        courses = {}
-        for group in groups:
-            group_lessons = [
-                lesson
-                for lesson in group.lessons
-                if lesson.semester == HEBREW_SEMESTERS[semester]
-            ]
-            if len(group_lessons) == 0:
-                continue
-
-            if group.id not in courses:
-                courses[group.id] = {
-                    "name": group.name,
-                    "faculty": group.faculty,
-                    "exams": group.exams,
-                    "groups": [],
-                }
-
-            if len(group.exams) != 0:
-                courses[group.id]["exams"] = group.exams
-
-            courses[group.id]["groups"].append(
-                {
-                    "group": group.group,
-                    "lecturer": group.lecturer,
-                    "lessons": [
-                        {k: v for k, v in lesson.__dict__.items() if k != "semester"}
-                        for lesson in group_lessons
-                    ],
-                }
-            )
+        courses = catalog(groups, semester)
 
         with progress:
             prerequisites_task_id = progress.add_task(

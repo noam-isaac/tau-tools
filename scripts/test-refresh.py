@@ -6,6 +6,7 @@ import runpy
 import json
 import textwrap
 from datetime import datetime, timezone
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch, call
@@ -15,7 +16,7 @@ from tau_tools.plans import main as scrape_plans
 
 import requests
 from bs4 import BeautifulSoup
-from tau_tools.courses import GroupInfo, LessonInfo, get_school_courses, parse_exams, parse_result_page
+from tau_tools.courses import GroupInfo, LessonInfo, get_school_courses, parse_exams, parse_result_page, main as scrape_courses
 from tau_tools.utilities import request
 
 refresh_module = runpy.run_path(str(Path(__file__).with_name("refresh-data.py")))
@@ -38,6 +39,16 @@ assert autumn["12345678"]["exams"] == [exam]
 assert autumn["12345678"]["exam_links"] == previous["12345678"]["exam_links"]
 assert catalog([annual, spring], "b", previous)["87654321"]["exams"] == []
 assert previous == before
+# The existing standalone CLI keeps its own semester/exam policy and course order.
+with TemporaryDirectory() as directory:
+    groups = [spring, annual, replace(spring, group="02", exams=[exam, exam]), replace(spring, group="03"), replace(spring, id="00000000")]
+    with patch('tau_tools.courses.get_schools', return_value=[('lstDep1', ['01'])]), patch('tau_tools.courses.get_school_courses', return_value=groups), patch('tau_tools.courses.get_prerequisites', return_value=None):
+        scrape_courses(str(Path(directory) / 'courses-{year}{semester}.json'), year=2026)
+    standalone = json.loads((Path(directory) / 'courses-2027b.json').read_text())
+    assert list(standalone) == [spring.id, '00000000'] and standalone[spring.id]['exams'] == [exam, exam]
+    assert [g['group'] for g in standalone[spring.id]['groups']] == ['01', '02', '03']
+    assert json.loads((Path(directory) / 'courses-2027a.json').read_text()) == {}
+    assert list(catalog(groups, 'b', {})) == ['00000000', annual.id, spring.id]
 assert parse_exams(BeautifulSoup('<div class="msgerrs">אין נתונים</div>', "html.parser")) == []
 regular = '<table class="tableblds"><tr><th>מועד</th><th>תאריך</th><th>שעה</th><th>סוג מטלה</th></tr><tr><td>א</td><td>01/07/2027</td><td>09:00</td><td>בחינה</td></tr></table>'
 assert parse_exams(BeautifulSoup(regular, "html.parser")) == [exam]
@@ -169,6 +180,7 @@ with TemporaryDirectory() as directory:
     plans = Mock(side_effect=write_plans)
     with patch.dict(refresh.__globals__, {"ROOT": root, "get_schools": lambda: [('lstDep1', ['01'])], "get_school_courses": scrape, "get_prerequisites": prerequisites, "refresh_plans": plans}), patch('requests.Session.get', side_effect=tau_discovery) as discover, patch('tau_tools.annual.collect', return_value={annual.id: [annual.group]}) as classify, patch('urllib.request.urlopen', side_effect=AssertionError('Exam already fetched')):
         refresh()
+    assert not (root / ".vercel/output").exists(), "Refresh validates inputs; only the workflow builds output"
     scrape.assert_called_once_with(0, ('lstDep1', ['01']), '2026')
     classify.assert_called_once_with(2027)
     assert prerequisites.call_args_list == [call(annual.id, '01', '2026', 'a'), call(annual.id, '01', '2026', 'b')]

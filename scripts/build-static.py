@@ -8,7 +8,7 @@ from pathlib import Path
 from tau_tools.validation import validate_calendar, validate_dataset
 
 
-def build(root):
+def validate(root):
     data = root / "data"
     files = sorted(data.glob("*.json"))
     for path in files:
@@ -17,13 +17,16 @@ def build(root):
         validate_dataset(path.stem, json.loads(path.read_text()))
     info = json.loads((data / "info.json").read_text())
     semesters = info["semesters"]
-    if not semesters or not all(re.fullmatch(r"\d{4}[ab]", semester) for semester in semesters):
-        raise ValueError("Invalid semester index")
     for name in ["courses.json", "annual-groups.json", "grades.json", "bidding.json", *[f"courses-{semester}.json" for semester in semesters]]:
         if not (data / name).is_file():
             raise ValueError(f"Missing indexed dataset: {name}")
     snapshot = json.loads((root / "snapshot.json").read_text())
     validate_calendar(info, [f"{year}{semester}" for year in snapshot.get("tauAcademicYears", []) for semester in ("a", "b")])
+    return files
+
+
+def build(root):
+    files = validate(root)
     prebuilt = root / ".vercel" / "output"
     if prebuilt.exists():
         shutil.rmtree(prebuilt)

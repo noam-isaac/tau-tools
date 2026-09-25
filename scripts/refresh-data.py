@@ -11,12 +11,11 @@ import re
 import runpy
 import shutil
 from datetime import datetime, timezone
-from itertools import groupby
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from bs4 import BeautifulSoup
-from tau_tools.courses import get_school_courses, get_schools
+from tau_tools.courses import catalog, get_school_courses, get_schools
 from tau_tools.collect import main as collect
 from tau_tools.annual import refresh as refresh_annual
 from tau_tools.plans import main as refresh_plans
@@ -26,32 +25,7 @@ from tau_tools.validation import validate_calendar
 
 ROOT = Path(__file__).resolve().parents[1]
 TAU = "https://www.ims.tau.ac.il/Tal/KR/Search_P.aspx"
-build = runpy.run_path(str(ROOT / "scripts/build-static.py"))["build"]
-
-
-def catalog(groups, semester, previous):
-    labels = {"a": "א'", "b": "ב'"}
-    label = labels[semester]
-    relevant = [g for g in groups if any(l.semester in (label, "שנתי") for l in g.lessons)]
-
-    def record(course_id, values):
-        entries = list(values)
-        exams = [e for g in entries for key in (label, "שנתי") for e in g.exams_by_semester.get(key, [])]
-        return {
-            **previous.get(course_id, {}),
-            "name": entries[0].name,
-            "faculty": entries[0].faculty,
-            "exams": list({json.dumps(e, sort_keys=True): e for e in exams}.values()),
-            "groups": [{
-                "group": g.group,
-                "lecturer": g.lecturer,
-                "lessons": [{k: v for k, v in vars(l).items() if k != "semester"}
-                            for l in g.lessons if l.semester in (label, "שנתי")],
-            } for g in entries],
-        }
-
-    return {course_id: record(course_id, values)
-            for course_id, values in groupby(sorted(relevant, key=lambda g: g.id), key=lambda g: g.id)}
+validate = runpy.run_path(str(ROOT / "scripts/build-static.py"))["validate"]
 
 
 def refresh():
@@ -143,7 +117,7 @@ def refresh():
             "unavailablePlans": [name for name in previous_snapshot.get("unavailablePlans", []) if name not in plan_files],
         }
         (staging / "snapshot.json").write_text(json.dumps(snapshot, indent=2) + "\n")
-        build(staging)
+        validate(staging)
         shutil.copytree(data, ROOT / "data", dirs_exist_ok=True)
         shutil.copyfile(staging / "snapshot.json", ROOT / "snapshot.json")
         print(f"Refresh complete: {completed}", flush=True)

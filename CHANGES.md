@@ -245,5 +245,11 @@ unused source-build settings/duplicate headers in `vercel.json`. Prebuilt output
 still contains dataset files, the manifest and the existing cache/CORS routes.
 Annual refresh now accepts/writes only the versioned public feed; removed the
 unwrapped legacy output mode and adjusted its existing recovery tests.
-The staging build followed by the workflow build, and the two separate catalog
-assembly implementations, remain unchanged in this cleanup.
+Catalog assembly is now shared by publication and the standalone course scraper.
+The existing policies remain distinct: publication includes annual lessons and
+combines exams; standalone output keeps its original semester filtering, course
+order and last nonempty exam list. Thirty offline comparisons against the prior
+implementations matched both outputs. Existing regression checks cover both callers.
+Refresh validates staging without creating disposable build output; the workflow
+builds the deployment output once. Validation still runs before replacing saved
+inputs and before creating deployment output, including reuse-only publication.
