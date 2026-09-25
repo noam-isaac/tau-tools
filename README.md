@@ -29,17 +29,17 @@ validation scripts, and deployment configuration. Vercel stores the published
 static snapshot. GitHub Actions builds and deploys it directly, without uploading
 a separate Actions artifact. There is no scraper API and browsing Dib It does not run TAU requests.
 
-The configured weekly job (Sunday, 03:23 UTC) discovers the two newest academic
-years from TAU and fetches their schedules and exams, including annual courses.
+The configured weekly job (Sunday, 03:23 UTC) discovers the newest academic
+year from TAU and fetches their schedules and exams, including annual courses.
 Missing historical catalogs, plans, grades, bidding data, prerequisites and exam
 links come from Arazim's public feeds. Existing historical catalogs retain our last
-verified data when they leave the two-year refresh window. These sources have their own update cadence;
+verified data when they leave the refreshed year. These sources have their own update cadence;
 download time alone is not evidence of freshness. The generated `/snapshot.json`
 records the last completed refresh, source, byte size and SHA-256 of each file.
 
 TAU school searches run sequentially and stop at the first failure. A fresh
 per-run cache reuses repeated exam requests. The pipeline requires complete,
-valid calendar dates for the two refreshed years and the source's current semester
+valid calendar dates for the refreshed year and the source's current semester
 before scraping course data. A missing calendar blocks publication rather than
 creating empty dates; Arazim's `currentSemester` still determines the app default.
 Schema validation checks the fields consumed by Dib It, including nested exam,
@@ -95,7 +95,7 @@ validation and remaining scraper-load limitations.
 
 `/data/annual-groups.json` is part of the same validated snapshot. The
 `tau_tools.annual` module was moved from Dib It, with its offline checks. It uses
-TAU's explicit annual-only search (`ckSem=0`), refreshes the newest two years in
+TAU's explicit annual-only search (`ckSem=0`), refreshes the newest year in
 the weekly pipeline and retains historical years. It reuses exam results already
 fetched by the course scraper; any missing annual exam pages are fetched
 sequentially, with a one-second delay. Both paths share the exam-table parser.

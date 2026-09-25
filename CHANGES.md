@@ -36,7 +36,7 @@ are included. No scraped HTML cache is uploaded.
 ## Differences from original Arazim code
 
 - `.github/workflows/scrape.yml`: replaces the original scraper/artifact job with
-  weekly latest-two-year refresh, validation and Vercel publication. Adds offline PR checks in `check.yml`.
+  weekly latest-year refresh, validation and Vercel publication. Adds offline PR checks in `check.yml`.
 - `src/tau_tools/courses.py`: supports annual and multi-semester exam lookups;
   validates regular and take-home exam tables (including mixed row lengths);
   rejects unknown empty/error pages; finishes stateful search pagination before
@@ -45,7 +45,7 @@ are included. No scraped HTML cache is uploaded.
   GET retries with backoff, and reusable sessions.
 - `scripts/import-published-data.py`: imports Arazim public JSON, validates JSON
   objects, retries interrupted downloads, records provenance and absent plans.
-- `scripts/refresh-data.py`: discovers the newest two academic years from TAU,
+- `scripts/refresh-data.py`: discovers the newest academic year from TAU,
   imports supplementary and missing historical data from Arazim, refreshes TAU schedules/exams,
   preserves supplementary course fields and validates in a temporary directory.
 - Build, restore and offline test scripts implement static publication and
@@ -174,3 +174,13 @@ still restore the previous Vercel snapshot. Offline checks remain. Historical
 artifact evidence above records earlier verification, not the current workflow.
 The two previously uploaded public-dataset artifacts were already expired when
 checked. This change does not run scrapers, enable schedules or deploy anything.
+
+## One academic year per refresh (25 September 2026)
+
+The refresh now selects only the newest academic year offered by TAU, keeping
+the existing newest-year selection policy and dropping the preceding year.
+It refreshes both semesters and annual exams for that one year. Saved older
+catalogs and annual data retain their bytes/timestamps without TAU re-scraping.
+A mocked regression offers two years and verifies that course and annual searches
+run only for the newest one, while previous-year files remain untouched.
+No TAU requests, workflow activation or deployment were used for verification.

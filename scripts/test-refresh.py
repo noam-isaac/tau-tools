@@ -139,22 +139,29 @@ with TemporaryDirectory() as directory:
     root = Path(directory)
     (root / 'data').mkdir()
     historical = {"source": refresh_module['TAU'], "filter": "ckSem=0", "verifiedAt": "2025-09-01", "groups": {"12345678": ["01"]}}
-    (root / 'data/annual-groups.json').write_text(json.dumps({"version": 1, "years": {"2025": historical}}))
+    (root / 'data/annual-groups.json').write_text(json.dumps({"version": 1, "years": {"2025": historical, "2026": historical}}))
     old_catalog = {"00000000": {"name": "Preserved TAU history", "faculty": "Faculty", "groups": [], "exams": [exam]}}
     old_bytes = json.dumps(old_catalog).encode()
-    (root / 'data/courses-2025a.json').write_bytes(old_bytes)
+    for semester in ('2025a', '2026a', '2026b'):
+        (root / f'data/courses-{semester}.json').write_bytes(old_bytes)
     (root / 'snapshot.json').write_text(json.dumps({"files": {"courses-2025a.json": {"source": refresh_module['TAU']}}}))
     historical_calendar = {**calendar, "semesters": {**calendar['semesters'], "2025a": {}}}
     response = Mock(text='<select name="lstYear"><option value="2025">2026</option><option value="2026">2027</option></select>')
     download = Mock(side_effect=lambda name: (name, json.dumps(historical_calendar if name == 'info.json' else {}).encode()))
     refresh = refresh_module['refresh']
-    with patch.dict(refresh.__globals__, {"ROOT": root, "download": download, "get_schools": lambda: [('lstDep1', ['01'])], "get_school_courses": lambda *args: [annual]}), patch('requests.Session.get', return_value=response), patch('tau_tools.annual.collect', return_value={annual.id: [annual.group]}), patch('urllib.request.urlopen', side_effect=AssertionError('Exam already fetched')):
+    scrape = Mock(return_value=[annual])
+    with patch.dict(refresh.__globals__, {"ROOT": root, "download": download, "get_schools": lambda: [('lstDep1', ['01'])], "get_school_courses": scrape}), patch('requests.Session.get', return_value=response), patch('tau_tools.annual.collect', return_value={annual.id: [annual.group]}) as classify, patch('urllib.request.urlopen', side_effect=AssertionError('Exam already fetched')):
         refresh()
-    assert (root / 'data/courses-2025a.json').read_bytes() == old_bytes
-    assert 'courses-2025a.json' not in [call.args[0] for call in download.call_args_list]
+    scrape.assert_called_once_with(0, ('lstDep1', ['01']), '2026')
+    classify.assert_called_once_with(2027)
+    for semester in ('2025a', '2026a', '2026b'):
+        assert (root / f'data/courses-{semester}.json').read_bytes() == old_bytes
+        assert f'courses-{semester}.json' not in [call.args[0] for call in download.call_args_list]
+    assert json.loads((root / 'snapshot.json').read_text())['tauAcademicYears'] == [2027]
     assert json.loads((root / 'snapshot.json').read_text())['files']['courses-2025a.json']['source'] == refresh_module['TAU']
     feed = json.loads((root / 'data/annual-groups.json').read_text())
     assert feed['years']['2025'] == historical
+    assert feed['years']['2026'] == historical
     assert set(feed['years']) == {'2025', '2026', '2027'}
     assert feed['years']['2027']['exams'][annual.id]['groups']['01'] == [exam]
     assert 'annual-groups.json' in json.loads((root / 'snapshot.json').read_text())['files']

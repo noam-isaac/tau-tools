@@ -1,4 +1,4 @@
-"""Refresh public feeds and scrape the two newest TAU academic years.
+"""Refresh public feeds and scrape the newest TAU academic year.
 
 Only the workflow publishes changes, after this command and the static build
 succeed. HTTP/parse failures therefore leave the deployed snapshot untouched.
@@ -61,9 +61,9 @@ def refresh():
         response = session.get(TAU, timeout=60)
     response.raise_for_status()
     options = BeautifulSoup(response.text, "html.parser").select('select[name="lstYear"] option')
-    years = sorted({int(o["value"]) + 1 for o in options if re.fullmatch(r"\d{4}", o.get("value", ""))})[-2:]
-    if len(years) != 2:
-        raise ValueError("Cannot discover the two newest TAU academic years")
+    years = sorted({int(o["value"]) + 1 for o in options if re.fullmatch(r"\d{4}", o.get("value", ""))})[-1:]
+    if not years:
+        raise ValueError("Cannot discover the newest TAU academic year")
     _, info_bytes = download("info.json")
     info = json.loads(info_bytes)
     semesters = info["semesters"]
