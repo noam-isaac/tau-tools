@@ -22,14 +22,12 @@ with TemporaryDirectory() as directory:
         "verifiedAt": "2026-09-18", "groups": {"12345678": ["01"]},
     }}}))
     build(root)
-    assert (root / "dist/data/info.json").read_bytes() == (root / "data/info.json").read_bytes()
-    assert "&lt;test&gt;" in (root / "dist/index.html").read_text()
     assert (root / ".vercel/output/static/data/info.json").read_bytes() == (root / "data/info.json").read_bytes()
     config = json.loads((root / ".vercel/output/config.json").read_text())
     assert config["version"] == 3
     assert config["routes"][0]["headers"]["Cache-Control"] == "public, max-age=0, must-revalidate"
     # Rejected records must leave the previously built output untouched.
-    output_before = (root / 'dist/data/courses-2027a.json').read_bytes()
+    output_before = (root / '.vercel/output/static/data/courses-2027a.json').read_bytes()
     annual = json.loads((root / 'data/annual-groups.json').read_text())
     malformed = {
         'courses-2027a': {'12345678': {'name': 12}},
@@ -51,7 +49,7 @@ with TemporaryDirectory() as directory:
             assert f'Invalid {name}.json' in str(error)
         else:
             raise AssertionError(f'Malformed {name} must fail publication')
-        assert (root / 'dist/data/courses-2027a.json').read_bytes() == output_before
+        assert (root / '.vercel/output/static/data/courses-2027a.json').read_bytes() == output_before
         if previous is None:
             path.unlink()
         else:

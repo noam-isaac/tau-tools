@@ -29,9 +29,8 @@ Scheduled runs refresh sources. Non-main publication runs create previews.
 A fresh checkout restores the last snapshot from Vercel. The restore validates
 filenames, JSON objects, byte lengths and SHA-256, and refuses to overwrite
 existing inputs. Failed source refreshes or builds do not replace the live site.
-Prebuilt uploads use gzip archives (about 12 MiB for this snapshot). The Python build emits both `dist/` and `.vercel/output/`; the latter is the
-portable deployment artifact. Only public datasets, provenance and an index
-are included. No scraped HTML cache is uploaded.
+Prebuilt uploads use gzip archives (about 12 MiB for this snapshot). The Python build emits only `.vercel/output/`, the prebuilt deployment artifact.
+Only public datasets and provenance are included. No scraped HTML cache is uploaded.
 
 ## Differences from original Arazim code
 
@@ -238,3 +237,13 @@ Offline regression checks cover a complete refresh with only TAU discovery,
 retained data/links/provenance, missing saved inputs, calendar rollover guards,
 source failures and historical preservation. No TAU or Arazim requests, workflow
 activation or deployment were used for this change.
+
+## Remove unused output support
+
+Removed the HTML dataset landing page, the duplicate `dist/` build tree and
+unused source-build settings/duplicate headers in `vercel.json`. Prebuilt output
+still contains dataset files, the manifest and the existing cache/CORS routes.
+Annual refresh now accepts/writes only the versioned public feed; removed the
+unwrapped legacy output mode and adjusted its existing recovery tests.
+The staging build followed by the workflow build, and the two separate catalog
+assembly implementations, remain unchanged in this cleanup.

@@ -112,7 +112,7 @@ def refresh():
                 refresh_plans(output_file_template=str(data / "plans-{year}.json"), year=year - 1, strict=True)
                 if not any(json.loads((data / f"plans-{year}.json").read_text()).values()):
                     raise ValueError(f"Empty TAU study plans for {year}; retain the previous snapshot")
-                refresh_annual([year], data / "annual-groups.json", feed=True, prefetched={
+                refresh_annual([year], data / "annual-groups.json", prefetched={
                     (g.id, g.group): g.exams_by_semester["שנתי"]
                     for g in groups if "שנתי" in g.exams_by_semester
                 })

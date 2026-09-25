@@ -74,6 +74,8 @@ directory, validates the result and deploys the prebuilt output directly to Verc
 leaves the existing production deployment live. Restored files must match the
 manifest's size and checksum; a concurrent source publication fails safely.
 Neither publication nor weekly refresh creates a Git commit.
+The builder emits only `.vercel/output/`, containing `/data/*.json` and
+`/snapshot.json`; there is no HTML landing page or second output directory.
 
 The workflow requires repository variables `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`
 and secret `VERCEL_TOKEN` (scoped to the TAU Tools Vercel project). Git integration
@@ -106,7 +108,7 @@ python3 scripts/restore-snapshot.py
 python3 scripts/build-static.py
 ```
 
-`data/`, `snapshot.json`, `dist/` and `.vercel/` are ignored. The restore command
+`data/`, `snapshot.json` and `.vercel/` are ignored. The restore command
 refuses to overwrite existing inputs. `scripts/refresh-data.py` contacts TAU; do not run it merely to test deployment.
 The Arazim bootstrap importer has been removed. Retained files may still name
 Arazim in provenance because that is where the original saved copy came from;

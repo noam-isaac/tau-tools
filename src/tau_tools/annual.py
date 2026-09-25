@@ -133,12 +133,12 @@ def collect_exams(year, groups, previous=None, prefetched=None):
     }
 
 
-def refresh(years, target, feed=False, prefetched=None):
+def refresh(years, target, prefetched=None):
     previous = json.loads(target.read_text()) if target.exists() else None
-    if feed and previous is not None and (previous.get("version") != 1 or not isinstance(previous.get("years"), dict)):
+    if previous is not None and (previous.get("version") != 1 or not isinstance(previous.get("years"), dict)):
         raise ValueError("Unsupported annual feed; preserve it for review")
-    data = (previous["years"] if feed else previous) if previous is not None else {}
-    classification_failures = dict(previous.get("classificationFailures", {})) if feed and previous else {}
+    data = previous["years"] if previous is not None else {}
+    classification_failures = dict(previous.get("classificationFailures", {})) if previous else {}
     for year in years:
         before = data.get(str(year), {})
         try:
@@ -158,7 +158,7 @@ def refresh(years, target, feed=False, prefetched=None):
         raise ValueError("No verified annual data is available; preserve the previous file")
     # Publish successes and retained snapshots together; failure metadata keeps their age visible.
     temporary = target.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps({"version": 1, "years": data, "classificationFailures": classification_failures} if feed else data, ensure_ascii=False, indent=2) + "\n")
+    temporary.write_text(json.dumps({"version": 1, "years": data, "classificationFailures": classification_failures}, ensure_ascii=False, indent=2) + "\n")
     temporary.replace(target)
 
 
@@ -220,19 +220,19 @@ def self_test():
         partial = collect_exams(2027, {"11111111": ["01", "02"]}, {"11111111": good})
     assert partial["exams"]["11111111"] == good, "Never mix successful and failed groups of one course"
     with tempfile.TemporaryDirectory() as directory:
-        target = Path(directory) / "annualGroups.json"
+        target = Path(directory) / "annual-groups.json"
         before = {"source": BASE + "Search_P.aspx", "filter": "ckSem=0", "verifiedAt": "2026-09-18",
                   "groups": {"11111111": ["01"]}, "exams": {"11111111": good}}
-        target.write_text(json.dumps({"2026": before}))
+        target.write_text(json.dumps({"version": 1, "years": {"2026": before}}))
         with patch(__name__ + ".collect", side_effect=OSError("Classification unavailable")), patch(__name__ + ".collect_exams", return_value=result):
             refresh([2026], target)
-        updated = json.loads(target.read_text())["2026"]
+        updated = json.loads(target.read_text())["years"]["2026"]
         assert updated["groups"] == before["groups"] and updated["verifiedAt"] == before["verifiedAt"]
         assert updated["classificationFailedAt"]
         assert updated["exams"]["22222222"]["groups"] == {"01": []}, "Exam updates survive classification failure"
         with patch(__name__ + ".collect", return_value={"11111111": ["01"], "22222222": ["01"]}), patch(__name__ + ".collect_exams", return_value=result):
             refresh([2026, 2028], target)
-        updated = json.loads(target.read_text())
+        updated = json.loads(target.read_text())["years"]
         assert set(updated) == {"2026", "2028"}
         assert updated["2026"]["groups"] == {"11111111": ["01"], "22222222": ["01"]}
         assert "classificationFailedAt" not in updated["2026"]
@@ -246,19 +246,19 @@ def self_test():
             else:
                 raise AssertionError("Unexpected failure ignored")
         assert target.read_bytes() == previous_bytes
-        feed = Path(directory) / "annual-groups.json"
+        feed = Path(directory) / "new-annual-groups.json"
         with patch(__name__ + ".collect", return_value={"11111111": ["01"]}), patch(__name__ + ".collect_exams", return_value=result):
-            refresh([2028], feed, True)
+            refresh([2028], feed)
         assert json.loads(feed.read_text())["version"] == 1
         with patch(__name__ + ".collect", side_effect=[OSError("New year unavailable"), {"11111111": ["01"]}]), patch(__name__ + ".collect_exams", return_value=result):
-            refresh([2029, 2028], feed, True)
+            refresh([2029, 2028], feed)
         partial_feed = json.loads(feed.read_text())
         assert "2029" in partial_feed["classificationFailures"]
         assert "2028" in partial_feed["years"] and "2029" not in partial_feed["years"]
         with patch(__name__ + ".collect", return_value={"11111111": ["01"]}), patch(__name__ + ".collect_exams", return_value=result):
-            refresh([2028], feed, True)
+            refresh([2028], feed)
             assert json.loads(feed.read_text())["classificationFailures"] == partial_feed["classificationFailures"]
-            refresh([2029], feed, True)
+            refresh([2029], feed)
             assert not json.loads(feed.read_text())["classificationFailures"]
 
     print("PASS annual source: parsing, reused exam results, independent refreshes, per-course failure, cancellation, retained timestamps and atomic publication")
@@ -275,4 +275,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     years = args.years
     print(f"Verifying annual groups for offered years: {years}", flush=True)
-    refresh(years, args.output, feed=True)
+    refresh(years, args.output)
