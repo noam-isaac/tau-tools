@@ -23,24 +23,3 @@ jobs:
           python -m tau_tools.annual --self-test
           python scripts/test-restore.py
           test -z "$(git ls-files data snapshot.json)"
-  artifact:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: python -m pip install .
-      - name: Restore only the existing Vercel snapshot (no scrapers)
-        run: python scripts/restore-snapshot.py
-      - run: python scripts/build-static.py
-      - uses: actions/upload-artifact@v4
-        with:
-          name: public-datasets-${{ github.run_id }}
-          path: .vercel/output
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 1

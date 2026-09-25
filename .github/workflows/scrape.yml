@@ -53,15 +53,7 @@ jobs:
         run: python scripts/refresh-data.py
       - name: Build the validated static snapshot
         run: python scripts/build-static.py
-      - name: Retain the build artifact outside Git
-        uses: actions/upload-artifact@v4
-        with:
-          name: public-datasets-${{ github.run_id }}
-          path: .vercel/output
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 1
-      - name: Publish the artifact to Vercel
+      - name: Publish the local build to Vercel
         run: |
           if [ "$GITHUB_REF" = refs/heads/main ]; then
             pnpm dlx vercel@59.25.0 deploy --prebuilt --archive=tgz --prod --yes --token="$VERCEL_TOKEN" > deployment-url.txt

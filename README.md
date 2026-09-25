@@ -26,8 +26,8 @@
 
 Generated JSON is **not stored in Git**. Git contains the library, refresh and
 validation scripts, and deployment configuration. Vercel stores the published
-static snapshot, and GitHub Actions retains each validated build as an artifact
-for one day. There is no scraper API and browsing Dib It does not run TAU requests.
+static snapshot. GitHub Actions builds and deploys it directly, without uploading
+a separate Actions artifact. There is no scraper API and browsing Dib It does not run TAU requests.
 
 The configured weekly job (Sunday, 03:23 UTC) discovers the two newest academic
 years from TAU and fetches their schedules and exams, including annual courses.
@@ -46,8 +46,7 @@ Schema validation checks the fields consumed by Dib It, including nested exam,
 plan, grade and bidding records. Historical optional/missing fields remain valid.
 
 Publication restores the last snapshot from Vercel, refreshes in a temporary
-directory, validates the result, uploads an Actions artifact and deploys the
-prebuilt output directly to Vercel. Failed restore, refresh, validation or deployment
+directory, validates the result and deploys the prebuilt output directly to Vercel. Failed restore, refresh, validation or deployment
 leaves the existing production deployment live. Restored files must match the
 manifest's size and checksum; a concurrent source publication fails safely.
 Neither publication nor weekly refresh creates a Git commit.
@@ -58,8 +57,8 @@ is disconnected, and `git.deploymentEnabled: false` prevents accidental Git buil
 if it is reconnected. The workflow has only `contents: read` permission and checkout
 does not persist Git credentials.
 
-The offline-check workflow also supports manual artifact verification using only
-existing Vercel files. It has no schedule, scraping step or deployment credentials.
+The offline-check workflow runs fixture-based tests only. It has no schedule,
+source downloads, artifact uploads or deployment credentials.
 
 Refresh-workflow manual dispatch defaults to **reusing the published snapshot**, with no TAU or
 Arazim requests. Branch runs create previews; `main` runs publish to production.

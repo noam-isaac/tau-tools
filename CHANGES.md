@@ -12,8 +12,8 @@ was 137,188,871 bytes. These are uncompressed file sizes, not Git pack sizes,
 network traffic measurements or billed storage totals.
 
 The replacement keeps code in Git and static files in Vercel deployments.
-GitHub Actions uploads the validated Vercel Build Output API artifact, retains it
-for **one day**, and deploys it with `vercel deploy --prebuilt`. There is no new
+GitHub Actions builds the validated Vercel Build Output API files and deploys
+them directly with `vercel deploy --prebuilt`. It uploads no Actions artifact. There is no new
 Blob store, database, Git LFS storage or permanent GitHub release archive.
 The workflow has `contents: read`, does not persist checkout credentials, and
 contains no `git add`, `git commit` or `git push` publication step.
@@ -22,8 +22,8 @@ The existing production snapshot remains available while the code is reviewed.
 Git integration for the TAU Tools Vercel project was disconnected before changing
 GitHub history. The weekly workflow is disabled during review. Manual dispatch
 normally republishes existing data; `refresh_sources` explicitly requests new
-TAU/Arazim traffic. The separate offline-check workflow can be manually dispatched
-to save a build artifact using only existing Vercel data, with no scraper code run.
+TAU/Arazim traffic. The separate offline-check workflow runs fixture-based tests only, including on
+manual dispatch; it does not download or upload production data.
 Scheduled runs refresh sources. Non-main publication runs create previews.
 
 A fresh checkout restores the last snapshot from Vercel. The restore validates
@@ -36,8 +36,7 @@ are included. No scraped HTML cache is uploaded.
 ## Differences from original Arazim code
 
 - `.github/workflows/scrape.yml`: replaces the original scraper/artifact job with
-  weekly latest-two-year refresh, validation, short-lived artifacts and Vercel
-  publication. Adds offline PR checks in `check.yml`.
+  weekly latest-two-year refresh, validation and Vercel publication. Adds offline PR checks in `check.yml`.
 - `src/tau_tools/courses.py`: supports annual and multi-semester exam lookups;
   validates regular and take-home exam tables (including mixed row lengths);
   rejects unknown empty/error pages; finishes stateful search pagination before
@@ -128,7 +127,7 @@ workflow that cannot run scrapers.
 
 Moved the existing annual-classification/exam generator and self-tests out of
 Dib It into `src/tau_tools/annual.py`. The weekly refresh writes
-`data/annual-groups.json` into the same snapshot and artifact as the catalogs.
+`data/annual-groups.json` into the same published snapshot as the catalogs.
 Year discovery comes from the Tools pipeline, without reading Dib It source files.
 The exam parser is shared with `courses.py`, and already-fetched annual exam
 results are reused; missing results use sequential requests with a one-second delay.
@@ -166,3 +165,12 @@ Offline regressions cover each case. All 66 existing saved datasets also pass th
 new validation. No TAU requests were used for these checks. Dib It's corresponding
 PR consumes per-group annual exams and uses a seven-day freshness threshold;
 these are app-side corrections, not a new publication architecture.
+
+## Remove redundant Actions storage (25 September 2026)
+
+Removed the publication job's artifact upload and the separate artifact-only
+verification job. Publication uses the local validated build directly; refreshes
+still restore the previous Vercel snapshot. Offline checks remain. Historical
+artifact evidence above records earlier verification, not the current workflow.
+The two previously uploaded public-dataset artifacts were already expired when
+checked. This change does not run scrapers, enable schedules or deploy anything.
