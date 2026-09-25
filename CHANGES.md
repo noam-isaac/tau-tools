@@ -22,7 +22,7 @@ The existing production snapshot remains available while the code is reviewed.
 Git integration for the TAU Tools Vercel project was disconnected before changing
 GitHub history. The weekly workflow is disabled during review. Manual dispatch
 normally republishes existing data; `refresh_sources` explicitly requests new
-TAU/Arazim traffic. The separate offline-check workflow runs fixture-based tests only, including on
+TAU traffic. The separate offline-check workflow runs fixture-based tests only, including on
 manual dispatch; it does not download or upload production data.
 Scheduled runs refresh sources. Non-main publication runs create previews.
 
@@ -43,11 +43,9 @@ are included. No scraped HTML cache is uploaded.
   exam lookups; guards against repeated pages; reuses HTTP sessions.
 - `src/tau_tools/utilities.py`: adds a 60-second timeout, HTTP error checking,
   GET retries with backoff, and reusable sessions.
-- `scripts/import-published-data.py`: imports Arazim public JSON, validates JSON
-  objects, retries interrupted downloads, records provenance and absent plans.
 - `scripts/refresh-data.py`: discovers the newest academic year from TAU,
-  imports supplementary and missing historical data from Arazim, refreshes TAU schedules/exams,
-  preserves supplementary course fields and validates in a temporary directory.
+  refreshes TAU schedules/exams/prerequisites/plans, preserves saved supplementary
+  data and validates in a temporary directory. No Arazim feed downloads remain.
 - Build, restore and offline test scripts implement static publication and
   regression checks. `jsonschema` is the one new direct Python dependency, used to
   validate the data contracts consumed by Dib It before publication.
@@ -83,8 +81,7 @@ TAU school searches now run sequentially; a failure stops subsequent searches.
 A fresh staging directory enables the existing HTTP cache within each run,
 reusing repeated exam requests. The normal per-exam delay remains 0.2s; missing
 annual exam lookups remain sequential with a one-second delay. There is still
-no global request limiter or measured request/byte accounting. Arazim downloads
-use four workers. The schedule remains paused.
+no global request limiter or measured request/byte accounting. The schedule remains paused.
 
 The prior audit counted 21,890 completed group records in the successful run and
 32,374 across logged completed batches in all attempts. These are **not HTTP
@@ -208,3 +205,36 @@ manual source runs. The timeout fails publication and preserves the live data.
 The workflow remains paused for review; no live TAU scrape was used to test it.
 Offline checks cover direct lookups, historical preservation, failed-source
 atomicity, the strict plan path and the overnight guard boundaries.
+
+## Remove Arazim feed dependence (25 September 2026)
+
+Deleted the bootstrap importer and every refresh-time Arazim JSON download.
+Refresh starts with our restored snapshot, uses direct TAU generators for the
+newest year's courses/exams/prerequisites/plans, and rebuilds the aggregate index.
+Missing retained inputs fail before course scraping; there is no public-feed
+fallback. Historical catalogs/plans and supplementary data are retained.
+The manifest distinguishes refreshed and retained files and preserves existing
+provenance/timestamps. It no longer labels a new scrape as a feed download.
+No change to storage, app runtime, schedule or source request frequency is added.
+
+The independence has limits: this repository contains no public grade-statistics
+or calendar generator. Its Moodle exam-link generator needs a login. Its bidding
+scraper is not part of the original scheduled workflow and would add nine queries
+per supported course with no year filter, so it remains a standalone tool.
+Grades, bidding and archived links are therefore retained, not updated weekly.
+New courses lack old exam links. Dates in `info.json` and `currentSemester` need
+explicit maintenance: unknown new-year dates block the full refresh, and a stale
+default can keep Dib It opening an old semester even after course refresh succeeds.
+Missing historical courses block publication; optional missing plans stay missing.
+Our saved publication is now required to recover supplementary/history inputs.
+
+Local saved-data inspection found `currentSemester: 2026a` despite calendar
+entries through 2027b, and bidding records only through 2024b. These are observations
+of the saved input, not a new live-source freshness claim. We did not guess a new
+default, replace dates or start a bidding scrape. Public grade semester keys even
+include 2031a, so the greatest key cannot establish that file's freshness.
+
+Offline regression checks cover a complete refresh with only TAU discovery,
+retained data/links/provenance, missing saved inputs, calendar rollover guards,
+source failures and historical preservation. No TAU or Arazim requests, workflow
+activation or deployment were used for this change.

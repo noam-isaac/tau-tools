@@ -1,4 +1,4 @@
-"""Refresh public feeds and scrape the newest TAU academic year.
+"""Refresh the newest TAU academic year using our saved snapshot.
 
 Only the workflow publishes changes, after this command and the static build
 succeed. HTTP/parse failures therefore leave the deployed snapshot untouched.
@@ -10,13 +10,11 @@ import os
 import re
 import runpy
 import shutil
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from itertools import groupby
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import requests
 from bs4 import BeautifulSoup
 from tau_tools.courses import get_school_courses, get_schools
 from tau_tools.collect import main as collect
@@ -28,7 +26,6 @@ from tau_tools.validation import validate_calendar
 
 ROOT = Path(__file__).resolve().parents[1]
 TAU = "https://www.ims.tau.ac.il/Tal/KR/Search_P.aspx"
-download = runpy.run_path(str(ROOT / "scripts/import-published-data.py"))["download"]
 build = runpy.run_path(str(ROOT / "scripts/build-static.py"))["build"]
 
 
@@ -58,7 +55,7 @@ def catalog(groups, semester, previous):
 
 
 def refresh():
-    started = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    info = json.loads((ROOT / "data/info.json").read_text())
     with new_session() as session:
         response = session.get(TAU, timeout=60)
     response.raise_for_status()
@@ -66,33 +63,21 @@ def refresh():
     years = sorted({int(o["value"]) + 1 for o in options if re.fullmatch(r"\d{4}", o.get("value", ""))})[-1:]
     if not years:
         raise ValueError("Cannot discover the newest TAU academic year")
-    _, info_bytes = download("info.json")
-    info = json.loads(info_bytes)
-    semesters = info["semesters"]
-    if not isinstance(semesters, dict) or not semesters or any(not re.fullmatch(r"\d{4}[ab]", s) for s in semesters):
-        raise ValueError("Invalid public semester index")
-    previous_snapshot = json.loads((ROOT / "snapshot.json").read_text()) if (ROOT / "snapshot.json").exists() else {}
-    previous_info = json.loads((ROOT / "data/info.json").read_text()) if (ROOT / "data/info.json").exists() else {}
-    info = {**info, "semesters": {
-        **previous_info.get("semesters", {}),
-        **{semester: {**previous_info.get("semesters", {}).get(semester, {}), **dates} for semester, dates in semesters.items()},
-    }}
-    # Do not advertise or scrape a new semester until its source calendar is complete.
+    previous_snapshot = json.loads((ROOT / "snapshot.json").read_text())
+    # Calendar metadata is maintained in our snapshot, not fetched from another feed.
+    # ponytail: no calendar generator upstream; missing dates require a manual update.
     validate_calendar(info, [f"{year}{s}" for year in years for s in ("a", "b")])
-    names = ["grades.json", "bidding.json",
-             *[f"courses-{s}.json" for s in semesters
-               if s[:4] in {str(year) for year in years} or not (ROOT / "data" / f"courses-{s}.json").exists()],
-             *[f"plans-{y}.json" for y in sorted({s[:4] for s in semesters})
-               if int(y) not in years and not (ROOT / "data" / f"plans-{y}.json").exists()]]
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        downloads = [("info.json", info_bytes), *pool.map(download, names)]
+    # Detect missing retained inputs before the expensive TAU course lookups.
+    for name in ["grades.json", "bidding.json", *[
+        f"courses-{semester}.json" for semester in info["semesters"]
+        if semester[:4] not in {str(year) for year in years}
+    ]]:
+        if not (ROOT / "data" / name).is_file():
+            raise ValueError(f"Missing saved dataset: {name}; restore our snapshot first")
     with TemporaryDirectory() as directory:
         staging = Path(directory)
         data = staging / "data"
         shutil.copytree(ROOT / "data", data)
-        for name, content in downloads:
-            if content is not None:
-                (data / name).write_bytes(content)
         previous_directory = Path.cwd()
         try:
             os.chdir(staging)
@@ -131,7 +116,6 @@ def refresh():
                     (g.id, g.group): g.exams_by_semester["שנתי"]
                     for g in groups if "שנתי" in g.exams_by_semester
                 })
-            (data / "info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n")
             os.chdir(data)
             collect()
         finally:
@@ -139,20 +123,24 @@ def refresh():
         completed = datetime.now(timezone.utc).isoformat(timespec="seconds")
         plan_files = {f"plans-{y}.json" for y in years}
         direct_files = {"annual-groups.json", *{f"courses-{y}{s}.json" for y in years for s in ("a", "b")}}
+        refreshed_files = direct_files | plan_files | {"courses.json"}
         snapshot = {
-            "source": "https://arazim-project.com/data/",
-            "downloadedAt": started,
+            "source": TAU,
+            "generatedAt": completed,
             "automaticRefresh": True,
             "schedule": "Weekly, Saturday at 22:23 UTC; scraping stops by 04:00 UTC",
             "lastSuccessfulRefresh": completed,
             "tauAcademicYears": years,
             "retainedCourseFields": ["exam_links"],
             "files": {p.name: {
+                **previous_snapshot.get("files", {}).get(p.name, {}),
                 "bytes": p.stat().st_size,
                 "sha256": hashlib.sha256(p.read_bytes()).hexdigest(),
-                "source": "https://tochniot.tau.ac.il/graphql" if p.name in plan_files else TAU if p.name in direct_files else ("derived" if p.name in ("courses.json", "info.json") else previous_snapshot.get("files", {}).get(p.name, {}).get("source", "https://arazim-project.com/data/")),
+                "source": "https://tochniot.tau.ac.il/graphql" if p.name in plan_files else TAU if p.name in direct_files else ("derived" if p.name == "courses.json" else previous_snapshot.get("files", {}).get(p.name, {}).get("source", "saved snapshot")),
+                "refreshStatus": "refreshed" if p.name in refreshed_files else "retained",
+                **({"lastSuccessfulRefresh": completed} if p.name in refreshed_files else {}),
             } for p in sorted(data.glob("*.json"))},
-            "unavailablePlans": [name for name, content in downloads if content is None],
+            "unavailablePlans": [name for name in previous_snapshot.get("unavailablePlans", []) if name not in plan_files],
         }
         (staging / "snapshot.json").write_text(json.dumps(snapshot, indent=2) + "\n")
         build(staging)

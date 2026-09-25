@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       refresh_sources:
-        description: Fetch new data from TAU and Arazim (false republishes the existing snapshot)
+        description: Fetch new data from TAU (false republishes the existing snapshot)
         type: boolean
         default: false
 permissions:

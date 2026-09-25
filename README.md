@@ -32,11 +32,27 @@ a separate Actions artifact. There is no scraper API and browsing Dib It does no
 The configured weekly job (Saturday, 22:23 UTC) discovers the newest academic
 year from TAU and fetches its schedules, exams, prerequisites and study plans,
 including annual courses. The job reuses the original prerequisite/plan scrapers.
-Missing historical catalogs/plans, grades, bidding data, calendar metadata and
-exam links come from Arazim's public feeds. Existing historical catalogs retain our last
-verified data when they leave the refreshed year. These sources have their own update cadence;
-download time alone is not evidence of freshness. The generated `/snapshot.json`
-records the last completed refresh, source, byte size and SHA-256 of each file.
+There are no runtime downloads from Arazim. Saved historical catalogs/plans,
+grades, bidding and archived exam links are retained from our own snapshot.
+`info.json` is also retained and must be maintained locally. The generated
+`/snapshot.json` marks each file as refreshed or retained and preserves the
+source and any recorded refresh timestamp of retained files. A successful run
+is evidence of a course/plan refresh, not fresh grades, bidding or exam links.
+
+| Dataset | Source and remaining limitation |
+| --- | --- |
+| Schedules, exam dates, prerequisites, study plans | Original TAU generators, newest year only; historical years stay saved. |
+| Calendar and default semester | Our saved `data/info.json`; no generator exists here. Update dates and `currentSemester` explicitly. Missing new-year dates stop publication before course scraping. |
+| Public grade statistics | Saved `grades.json`; no generator exists here. The IMS/Moodle grade APIs retrieve a logged-in student's grades, not this public aggregate. |
+| Bidding statistics | Saved `bidding.json`. The upstream standalone scraper exists, but its scheduled workflow does not run it. It queries nine semester/round combinations per supported course with no year filter; enabling it would add a separate, substantial scrape. |
+| Archived exam links | Saved course `exam_links`; the upstream generator requires an interactive Moodle login. New courses have no saved links. This does not affect fresh exam dates. |
+| Missing historical files | No Arazim backfill. Missing indexed course catalogs stop publication; historically unavailable optional study plans remain unavailable. |
+
+This removes dependence on Arazim's availability, but it does **not** make all
+supplementary data independently regenerable. Grade/bidding displays and archived
+links can become outdated. The saved semester default does not advance itself.
+A clean checkout must restore our snapshot; losing every saved copy loses data
+that these scheduled generators cannot rebuild. No extra backup service is added.
 
 The schedule is once weekly, below Arazim's published Sunday/Thursday cadence.
 Saturday 22:23 UTC is Sunday 00:23 in Israel in winter or 01:23 in summer.
@@ -47,9 +63,9 @@ intact. Manual reuse-only publication does not scrape and is not time-restricted
 
 TAU school searches run sequentially and stop at the first failure. A fresh
 per-run cache reuses repeated exam requests. The pipeline requires complete,
-valid calendar dates for the refreshed year and the source's current semester
+valid calendar dates for the refreshed year and our saved current semester
 before scraping course data. A missing calendar blocks publication rather than
-creating empty dates; Arazim's `currentSemester` still determines the app default.
+creating empty dates; our `info.json` determines the app default.
 Schema validation checks the fields consumed by Dib It, including nested exam,
 plan, grade and bidding records. Historical optional/missing fields remain valid.
 
@@ -68,8 +84,7 @@ does not persist Git credentials.
 The offline-check workflow runs fixture-based tests only. It has no schedule,
 source downloads, artifact uploads or deployment credentials.
 
-Refresh-workflow manual dispatch defaults to **reusing the published snapshot**, with no TAU or
-Arazim requests. Branch runs create previews; `main` runs publish to production.
+Refresh-workflow manual dispatch defaults to **reusing the published snapshot**, with no TAU requests. Branch runs create previews; `main` runs publish to production.
 Fetching fresh data requires selecting `refresh_sources`, or a scheduled run.
 The refresh workflow is paused for review of this migration; merging the PR alone
 does not re-enable it. The existing production snapshot remains available meanwhile.
@@ -92,9 +107,10 @@ python3 scripts/build-static.py
 ```
 
 `data/`, `snapshot.json`, `dist/` and `.vercel/` are ignored. The restore command
-refuses to overwrite existing inputs. `scripts/refresh-data.py` contacts TAU and
-Arazim; do not run it merely to test deployment. The original bootstrap script
-imports Arazim data and refuses to overwrite an existing `data/` directory.
+refuses to overwrite existing inputs. `scripts/refresh-data.py` contacts TAU; do not run it merely to test deployment.
+The Arazim bootstrap importer has been removed. Retained files may still name
+Arazim in provenance because that is where the original saved copy came from;
+that attribution does not cause a network request.
 
 See [CHANGES.md](CHANGES.md) for the upstream comparison, history cleanup,
 validation and remaining scraper-load limitations.
@@ -174,13 +190,13 @@ Example:
 
 ## Scrapers
 
-You can get mostly up to date data from the following URLs:
+This fork publishes its snapshot at the following URLs. See the retention limits above:
 
-- https://arazim-project.com/data/courses-2025a.json
-- https://arazim-project.com/data/courses-2025b.json
-- https://arazim-project.com/data/plans-2025.json
+- https://tau-tools.vercel.app/data/courses-2025a.json
+- https://tau-tools.vercel.app/data/courses-2025b.json
+- https://tau-tools.vercel.app/data/plans-2025.json
 
-You can also get rolled-up information about all of the courses in https://arazim-project.com/data/courses.json, using the [collect](#collect-the-data-together) script.
+You can also get rolled-up information about all of the courses in https://tau-tools.vercel.app/data/courses.json, using the [collect](#collect-the-data-together) script.
 
 ### Get course details
 

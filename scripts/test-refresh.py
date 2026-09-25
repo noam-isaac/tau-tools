@@ -61,23 +61,18 @@ with patch('requests.Session.request', return_value=response), patch('builtins.o
         raise AssertionError("HTTP failures must abort refresh")
     write.assert_not_called()
 
-download_response = Mock(status_code=200, content=b'{}')
-download_response.json.return_value = {}
-with patch('requests.Session.get', side_effect=[requests.ConnectionError('interrupted body'), download_response]) as get, patch('time.sleep'):
-    assert refresh_module['download']('bidding.json') == ('bidding.json', b'{}')
-    assert get.call_count == 2
-
-# A failure after downloading replacement files must leave the published inputs intact.
+# A source failure must leave our saved inputs intact, without contacting Arazim.
 with TemporaryDirectory() as directory:
     root = Path(directory)
     (root / "data").mkdir()
-    (root / "data/info.json").write_text('{"original": true}')
+    (root / "data/info.json").write_text(json.dumps(calendar))
+    for name in ("grades", "bidding", "courses-2026a", "courses-2026b"):
+        (root / f"data/{name}.json").write_text("{}")
     (root / "snapshot.json").write_text('{"original": true}')
     response = Mock(text='<select name="lstYear"><option value="2025">2026</option><option value="2026">2027</option></select>')
-    download = lambda name: (name, json.dumps(calendar if name == 'info.json' else {}).encode())
     refresh = refresh_module["refresh"]
     scrape = Mock(side_effect=ValueError('source failure'))
-    with patch.dict(refresh.__globals__, {"ROOT": root, "download": download, "get_schools": lambda: [('lstDep1', ['01', '02', '03'])], "get_school_courses": scrape}), patch('requests.Session.get', return_value=response):
+    with patch.dict(refresh.__globals__, {"ROOT": root, "get_schools": lambda: [('lstDep1', ['01', '02', '03'])], "get_school_courses": scrape}), patch('requests.Session.get', return_value=response):
         try:
             refresh()
         except ValueError as error:
@@ -85,7 +80,7 @@ with TemporaryDirectory() as directory:
         else:
             raise AssertionError('A failed source must abort publication')
     assert scrape.call_count == 1, 'No later TAU searches after a source failure'
-    assert (root / 'data/info.json').read_text() == '{"original": true}'
+    assert json.loads((root / 'data/info.json').read_text()) == calendar
     assert (root / 'snapshot.json').read_text() == '{"original": true}'
 
 # Duplicate exam lookups in a fresh run reuse the first successful response.
@@ -153,7 +148,18 @@ with TemporaryDirectory() as directory:
     (root / 'data/plans-2026.json').write_text('{}')
     historical_calendar = {**calendar, "semesters": {**calendar['semesters'], "2025a": {}}}
     response = Mock(text='<select name="lstYear"><option value="2025">2026</option><option value="2026">2027</option></select>')
-    download = Mock(side_effect=lambda name: (name, json.dumps(historical_calendar if name == 'info.json' else {}).encode()))
+    (root / 'data/info.json').write_text(json.dumps(historical_calendar))
+    (root / 'data/grades.json').write_text('{"12345678": {"2026a": {"01": [{"mean": 82}]}}}')
+    (root / 'data/bidding.json').write_text('{"12345678": {"2026a": {"01": [{"minimal": 20}]}}}')
+    (root / 'data/courses-2027a.json').write_text(json.dumps(previous))
+    retained_bytes = {name: (root / 'data' / name).read_bytes() for name in ('info.json', 'grades.json', 'bidding.json')}
+    (root / 'snapshot.json').write_text(json.dumps({"files": {
+        "courses-2025a.json": {"source": refresh_module['TAU']},
+        "grades.json": {"source": "https://arazim-project.com/data/", "lastSuccessfulRefresh": "2026-09-01T00:00:00Z"},
+    }}))
+    def tau_discovery(url, **kwargs):
+        assert url == refresh_module['TAU'], f"Unexpected feed request: {url}"
+        return response
     refresh = refresh_module['refresh']
     scrape = Mock(return_value=[annual])
     prerequisites = Mock(side_effect=lambda course, group, year, semester: None if semester == 'a' else {"kind": "all", "courses": ["87654321"]})
@@ -161,7 +167,7 @@ with TemporaryDirectory() as directory:
         assert strict and year == 2026
         Path(output_file_template.format(year=year + 1)).write_text(json.dumps({"School": {"Program": {"Required": {"courses": {}, "count": 0}}}}))
     plans = Mock(side_effect=write_plans)
-    with patch.dict(refresh.__globals__, {"ROOT": root, "download": download, "get_schools": lambda: [('lstDep1', ['01'])], "get_school_courses": scrape, "get_prerequisites": prerequisites, "refresh_plans": plans}), patch('requests.Session.get', return_value=response), patch('tau_tools.annual.collect', return_value={annual.id: [annual.group]}) as classify, patch('urllib.request.urlopen', side_effect=AssertionError('Exam already fetched')):
+    with patch.dict(refresh.__globals__, {"ROOT": root, "get_schools": lambda: [('lstDep1', ['01'])], "get_school_courses": scrape, "get_prerequisites": prerequisites, "refresh_plans": plans}), patch('requests.Session.get', side_effect=tau_discovery) as discover, patch('tau_tools.annual.collect', return_value={annual.id: [annual.group]}) as classify, patch('urllib.request.urlopen', side_effect=AssertionError('Exam already fetched')):
         refresh()
     scrape.assert_called_once_with(0, ('lstDep1', ['01']), '2026')
     classify.assert_called_once_with(2027)
@@ -169,14 +175,20 @@ with TemporaryDirectory() as directory:
     assert plans.call_count == 1
     assert json.loads((root / 'data/courses-2027a.json').read_text())[annual.id]['prerequisites'] is None
     assert json.loads((root / 'data/courses-2027b.json').read_text())[annual.id]['prerequisites']['courses'] == ['87654321']
-    assert 'plans-2027.json' not in [item.args[0] for item in download.call_args_list]
-    assert 'plans-2026.json' not in [item.args[0] for item in download.call_args_list]
+    discover.assert_called_once_with(refresh_module['TAU'], timeout=60)
+    assert json.loads((root / 'data/courses-2027a.json').read_text())[annual.id]['exam_links'] == previous[annual.id]['exam_links']
+    assert {name: (root / 'data' / name).read_bytes() for name in retained_bytes} == retained_bytes
+    manifest = json.loads((root / 'snapshot.json').read_text())
+    assert manifest['files']['grades.json']['lastSuccessfulRefresh'] == '2026-09-01T00:00:00Z'
+    assert manifest['files']['grades.json']['source'] == 'https://arazim-project.com/data/'
+    assert all(manifest['files'][name]['refreshStatus'] == 'retained' for name in retained_bytes)
+    assert manifest['files']['courses-2027a.json']['refreshStatus'] == 'refreshed'
     assert (root / 'data/plans-2026.json').read_text() == '{}'
     assert json.loads((root / 'snapshot.json').read_text())['files']['plans-2027.json']['source'] == 'https://tochniot.tau.ac.il/graphql'
     preserved = {path.name: path.read_bytes() for path in (root / 'data').glob('*.json')}
     snapshot_before = (root / 'snapshot.json').read_bytes()
     for failure in ('get_prerequisites', 'refresh_plans'):
-        with patch.dict(refresh.__globals__, {"ROOT": root, "download": download, "get_schools": lambda: [('lstDep1', ['01'])], "get_school_courses": scrape, "get_prerequisites": prerequisites, "refresh_plans": plans, failure: Mock(side_effect=ValueError('Source unavailable'))}), patch('requests.Session.get', return_value=response):
+        with patch.dict(refresh.__globals__, {"ROOT": root, "get_schools": lambda: [('lstDep1', ['01'])], "get_school_courses": scrape, "get_prerequisites": prerequisites, "refresh_plans": plans, failure: Mock(side_effect=ValueError('Source unavailable'))}), patch('requests.Session.get', return_value=response):
             try:
                 refresh()
             except ValueError as error:
@@ -187,7 +199,6 @@ with TemporaryDirectory() as directory:
         assert (root / 'snapshot.json').read_bytes() == snapshot_before
     for semester in ('2025a', '2026a', '2026b'):
         assert (root / f'data/courses-{semester}.json').read_bytes() == old_bytes
-        assert f'courses-{semester}.json' not in [call.args[0] for call in download.call_args_list]
     assert json.loads((root / 'snapshot.json').read_text())['tauAcademicYears'] == [2027]
     assert json.loads((root / 'snapshot.json').read_text())['files']['courses-2025a.json']['source'] == refresh_module['TAU']
     feed = json.loads((root / 'data/annual-groups.json').read_text())
@@ -205,8 +216,10 @@ for invalid in ({"semesters": {"2027a": {}}},
     with TemporaryDirectory() as directory:
         root = Path(directory)
         (root / 'data').mkdir()
+        (root / "data/info.json").write_text(json.dumps(invalid))
+        (root / "snapshot.json").write_text("{}")
         schools = Mock(side_effect=AssertionError('Must validate dates before scraping schools'))
-        with patch.dict(refresh.__globals__, {"ROOT": root, "download": lambda name: (name, json.dumps(invalid).encode()), "get_schools": schools}), patch('requests.Session.get', return_value=response):
+        with patch.dict(refresh.__globals__, {"ROOT": root, "get_schools": schools}), patch('requests.Session.get', return_value=response):
             try:
                 refresh()
             except ValueError as error:
@@ -214,6 +227,22 @@ for invalid in ({"semesters": {"2027a": {}}},
             else:
                 raise AssertionError('Incomplete calendar accepted')
         schools.assert_not_called()
+# No automatic backfill of missing history or supplements from another publisher.
+with TemporaryDirectory() as directory:
+    root = Path(directory)
+    (root / 'data').mkdir()
+    (root / 'data/info.json').write_text(json.dumps(calendar))
+    (root / 'snapshot.json').write_text('{}')
+    for missing in ('grades.json', 'bidding.json', 'courses-2026a.json', 'courses-2026b.json'):
+        with patch.dict(refresh.__globals__, {"ROOT": root, "get_schools": schools}), patch('requests.Session.get', return_value=response):
+            try:
+                refresh()
+            except ValueError as error:
+                assert f'Missing saved dataset: {missing}' in str(error)
+            else:
+                raise AssertionError('Missing saved input accepted')
+        schools.assert_not_called()
+        (root / 'data' / missing).write_text('{}')
 print('Calendar guards passed')
 
 # Reuse the upstream plan scraper, but abort publication instead of silently skipping a failed plan.
