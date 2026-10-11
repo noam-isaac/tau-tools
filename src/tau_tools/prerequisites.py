@@ -34,11 +34,12 @@ def convert_table(table: Tag):
     return result
 
 
-def get_prerequisites(course: str, group: str, year: int, semester: str):
+def get_prerequisites(course: str, group: str, year: int, semester: str, s=None):
     page = BeautifulSoup(
         request(
             "GET",
             f"https://www.ims.tau.ac.il/tal/kr/Drishot_L.aspx?kurs={course}&kv={group}&sem={year}{semester}",
+            s,
             cache_category="prerequisites",
             cache_key=f"prerequisites-{course}{group}-{year}{semester}",
             headers={

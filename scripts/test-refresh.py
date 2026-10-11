@@ -9,10 +9,10 @@ from datetime import datetime, timezone
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import Mock, patch, call
+from unittest.mock import ANY, Mock, patch, call
 from types import SimpleNamespace
 
-from tau_tools.plans import main as scrape_plans
+from tau_tools.plans import get_plan, get_plans, main as scrape_plans, request_graphql
 
 import requests
 from bs4 import BeautifulSoup
@@ -90,7 +90,7 @@ with TemporaryDirectory() as directory:
             assert str(error) == 'source failure'
         else:
             raise AssertionError('A failed source must abort publication')
-    assert scrape.call_count == 1, 'No later TAU searches after a source failure'
+    assert 1 <= scrape.call_count <= 4, 'A failure may finish only the initial bounded batch'
     assert json.loads((root / 'data/info.json').read_text()) == calendar
     assert (root / 'snapshot.json').read_text() == '{"original": true}'
 
@@ -173,9 +173,9 @@ with TemporaryDirectory() as directory:
         return response
     refresh = refresh_module['refresh']
     scrape = Mock(return_value=[annual])
-    prerequisites = Mock(side_effect=lambda course, group, year, semester: None if semester == 'a' else {"kind": "all", "courses": ["87654321"]})
-    def write_plans(output_file_template, year, strict):
-        assert strict and year == 2026
+    prerequisites = Mock(side_effect=lambda course, group, year, semester, s=None: None if semester == 'a' else {"kind": "all", "courses": ["87654321"]})
+    def write_plans(output_file_template, year, strict, exclude_doctoral):
+        assert strict and exclude_doctoral and year == 2026
         Path(output_file_template.format(year=year + 1)).write_text(json.dumps({"School": {"Program": {"Required": {"courses": {}, "count": 0}}}}))
     plans = Mock(side_effect=write_plans)
     with patch.dict(refresh.__globals__, {"ROOT": root, "get_schools": lambda: [('lstDep1', ['01'])], "get_school_courses": scrape, "get_prerequisites": prerequisites, "refresh_plans": plans}), patch('requests.Session.get', side_effect=tau_discovery) as discover, patch('tau_tools.annual.collect', return_value={annual.id: [annual.group]}) as classify, patch('urllib.request.urlopen', side_effect=AssertionError('Exam already fetched')):
@@ -183,7 +183,7 @@ with TemporaryDirectory() as directory:
     assert not (root / ".vercel/output").exists(), "Refresh validates inputs; only the workflow builds output"
     scrape.assert_called_once_with(0, ('lstDep1', ['01']), '2026')
     classify.assert_called_once_with(2027)
-    assert prerequisites.call_args_list == [call(annual.id, '01', '2026', 'a'), call(annual.id, '01', '2026', 'b')]
+    assert prerequisites.call_args_list == [call(annual.id, '01', '2026', 'a', s=ANY), call(annual.id, '01', '2026', 'b', s=ANY)]
     assert plans.call_count == 1
     assert json.loads((root / 'data/courses-2027a.json').read_text())[annual.id]['prerequisites'] is None
     assert json.loads((root / 'data/courses-2027b.json').read_text())[annual.id]['prerequisites']['courses'] == ['87654321']
@@ -257,18 +257,74 @@ with TemporaryDirectory() as directory:
         (root / 'data' / missing).write_text('{}')
 print('Calendar guards passed')
 
+# TAU's inventory mixes source years. Never fetch older entries as this year's
+# curricula, or even resolve their missing IDs before applying the year filter.
+school = SimpleNamespace(id='1000', name='School', faculties=[])
+programs = [
+    {'teur': 'Historical', 'tcid': '8053', 'currentSafa': '1', 'shana': '2024', 'egedid': ''},
+    {'teur': 'Current', 'tcid': '9001', 'currentSafa': '1', 'shana': '2026', 'egedid': ''},
+    {'teur': 'Historical without ID', 'tcid': None, 'currentSafa': '1', 'shana': '2024', 'egedid': 'old'},
+]
+with patch('tau_tools.plans.request_graphql', return_value={'getPrograms': {'results': programs}}) as query:
+    assert [plan.id for plan in get_plans(school, year=2026)] == ['9001']
+    query.assert_called_once()
+programs[1]['toar'] = 'ראשון'
+programs.extend([
+    {'teur': 'Doctoral', 'tcid': None, 'currentSafa': '1', 'shana': '2026', 'egedid': 'phd', 'toar': 'שלישי'},
+    {'teur': 'Masters', 'tcid': '9002', 'currentSafa': '1', 'shana': '2026', 'egedid': '', 'toar': 'שני'},
+])
+with patch('tau_tools.plans.request_graphql', return_value={'getPrograms': {'results': programs}}) as query:
+    assert [plan.id for plan in get_plans(school, year=2026, exclude_doctoral=True)] == ['9001', '9002']
+    query.assert_called_once()
+
+# POST retries apply only to explicit read-only GraphQL queries, preserving the
+# global GET policy and never making mutation calls retryable.
+from tau_tools.utilities import new_session
+with new_session() as session:
+    assert set(session.get_adapter('https://example.org').max_retries.allowed_methods) == {'GET'}
+for query, methods in [('query results { results }', {'GET', 'POST'}), ('mutation update { update }', {'GET'})]:
+    with patch('tau_tools.plans.request', return_value='{"data": {}}') as transport:
+        request_graphql({'query': query})
+        session = transport.call_args.args[2]
+        assert set(session.get_adapter('https://tochniot.tau.ac.il/graphql').max_retries.allowed_methods) == methods
+        assert session.get_adapter('https://tochniot.tau.ac.il/graphql').max_retries.total == 3
+
+# A doctoral program can exist without a course curriculum. Accept only TAU's
+# explicit zero-row response for plan details, preserving strict source failures.
+plan = SimpleNamespace(id='4586', language='1')
+zero_rows = {'data': {'results': {'body': {'Tau': {'status': '001', 'numrows': '0', 'errmsgeng': 'No data'}}}}}
+with patch('tau_tools.plans.request', return_value=json.dumps(zero_rows)):
+    assert get_plan(plan, year=2026) == {}
+    try:
+        request_graphql({})
+    except Exception as error:
+        assert str(error) == 'No data'
+    else:
+        raise AssertionError('An empty inventory must still fail')
+for change in ({'status': '500'}, {'numrows': '1'}, {'errmsgeng': 'Service unavailable'}):
+    failure = copy.deepcopy(zero_rows)
+    failure['data']['results']['body']['Tau'].update(change)
+    with patch('tau_tools.plans.request', return_value=json.dumps(failure)):
+        try:
+            get_plan(plan, year=2026)
+        except Exception:
+            pass
+        else:
+            raise AssertionError('A source failure must not become an empty plan')
+
 # Reuse the upstream plan scraper, but abort publication instead of silently skipping a failed plan.
 with TemporaryDirectory() as directory:
     target = Path(directory) / 'plans-{year}.json'
     school = SimpleNamespace(name='School')
     plan = SimpleNamespace(id='1', name='Program')
-    with patch('tau_tools.plans.get_schools', return_value=[school]), patch('tau_tools.plans.get_plans', return_value=[plan]), patch('tau_tools.plans.get_plan', side_effect=ValueError('Plan unavailable')):
+    with patch('tau_tools.plans.get_schools', return_value=[school]), patch('tau_tools.plans.get_plans', return_value=[plan]) as plans, patch('tau_tools.plans.get_plan', side_effect=ValueError('Plan unavailable')):
         try:
             scrape_plans(str(target), year=2026, strict=True)
         except ValueError as error:
             assert str(error) == 'Plan unavailable'
         else:
             raise AssertionError('Strict plan refresh must propagate source failures')
+        plans.assert_called_once_with(school, year=2026, exclude_doctoral=False)
     assert not list(Path(directory).glob('*.json'))
 print('Direct prerequisite and plan checks passed')
 
@@ -290,3 +346,84 @@ for hour, allowed, seconds in [(21, False, None), (22, True, 21600), (0, True, 1
         else:
             run.assert_not_called()
 print('Weekly overnight window checks passed')
+
+# Parallel output stays ordered and cannot exceed four active lookups.
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Lock, get_ident
+parallel_map = refresh_module['parallel_map']
+barrier, guard = Barrier(4), Lock()
+counts = {'active': 0, 'peak': 0}
+def concurrent_lookup(number):
+    with guard:
+        counts['active'] += 1
+        counts['peak'] = max(counts['peak'], counts['active'])
+    try:
+        if number < 4:
+            barrier.wait(timeout=3)
+        return number * 2
+    finally:
+        with guard:
+            counts['active'] -= 1
+assert parallel_map(concurrent_lookup, range(12), 'Concurrency fixture') == list(range(0, 24, 2))
+assert counts['peak'] == 4 and counts['active'] == 0
+
+# An error stops queued work and HTTP calls in already-running school workers.
+from tau_tools.utilities import request_cancelled
+barrier = Barrier(4)
+def failing_lookup(number):
+    assert number < 4, 'No next batch after a failure'
+    barrier.wait(timeout=3)
+    if number == 0:
+        raise ValueError('First source failure')
+    assert request_cancelled.get().wait(timeout=3)
+    request('get', 'https://example.org/cancelled', delay=0)
+with patch('requests.Session.request', side_effect=AssertionError('Cancelled worker sent HTTP')) as http:
+    try:
+        parallel_map(failing_lookup, range(12), 'Cancellation fixture')
+    except ValueError as error:
+        assert str(error) == 'First source failure'
+    else:
+        raise AssertionError('A source failure must propagate')
+    http.assert_not_called()
+assert request_cancelled.get() is None, 'Worker cancellation must not leak'
+
+# Simultaneous duplicate misses share one request; different keys stay parallel.
+with TemporaryDirectory() as directory:
+    previous_directory = Path.cwd()
+    barrier = Barrier(2)
+    def response_fixture(method, url, **kwargs):
+        barrier.wait(timeout=3)
+        return Mock(text='Complete cached response: ' + url)
+    try:
+        os.chdir(directory)
+        with patch.dict(os.environ, {'TAU_TOOLS_FORCE_FETCH': ''}), patch('requests.Session.request', side_effect=response_fixture) as http, patch('os.replace', wraps=os.replace) as replace_cache:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                result = list(pool.map(lambda key: request('get', 'https://example.org/' + key, cache_category='parallel', cache_key=key, delay=0), ['a', 'a', 'b', 'b']))
+            assert http.call_count == 2 and replace_cache.call_count == 2
+            assert result == ['Complete cached response: https://example.org/' + key for key in ['a', 'a', 'b', 'b']]
+            assert sorted(p.name for p in Path('cache-parallel').iterdir()) == ['a.txt', 'b.txt']
+    finally:
+        os.chdir(previous_directory)
+
+# Prerequisite workers reuse isolated sessions and close them on completion.
+barrier = Barrier(4)
+sessions, owners = [], {}
+def session_fixture():
+    session = Mock()
+    sessions.append(session)
+    return session
+def prerequisite_fixture(course, group, year, semester, s=None):
+    with guard:
+        owners.setdefault(get_ident(), set()).add(id(s))
+    if int(course) < 4:
+        barrier.wait(timeout=3)
+    return {'kind': 'all', 'courses': [course]}
+fixture_courses = {f'{number:08d}': {'groups': [{'group': '01'}]} for number in range(12)}
+with patch.dict(refresh_module['prerequisites'].__globals__, {'new_session': session_fixture, 'get_prerequisites': prerequisite_fixture}):
+    result = refresh_module['prerequisites'](fixture_courses, 2027, 'a')
+assert list(result) == list(fixture_courses)
+assert all(result[key]['prerequisites']['courses'] == [key] for key in result)
+assert all('prerequisites' not in course for course in fixture_courses.values())
+assert len(sessions) == 4 and all(len(values) == 1 for values in owners.values())
+assert all(session.close.call_count == 1 for session in sessions)
+print('Parallel refresh, cancellation, cache and session checks passed')
