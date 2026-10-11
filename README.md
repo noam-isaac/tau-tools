@@ -58,7 +58,11 @@ The schedule is once weekly, below Arazim's published Sunday/Thursday cadence.
 Saturday 22:23 UTC is Sunday 00:23 in Israel in winter or 01:23 in summer.
 Source refreshes may start only between 22:00 and 04:00 UTC and are terminated
 at 04:00 UTC (06:00/07:00 Israel). This guard also applies to manual source
-refreshes and delayed scheduled jobs. A timeout leaves the previous deployment
+refreshes and delayed scheduled jobs. An explicitly requested manual run may set
+`allow_daytime_refresh=true` together with `refresh_sources=true` to start outside
+that window, with a 180-minute source-refresh limit. This input defaults to false,
+cannot override scheduled runs, and keeps the 04:00 cutoff for overnight runs.
+The overall job limit remains 330 minutes. A timeout leaves the previous deployment
 intact. Manual reuse-only publication does not scrape and is not time-restricted.
 
 Independent TAU school searches use at most four workers, with serial pagination

@@ -9,6 +9,10 @@ on:
         description: Fetch new data from TAU (false republishes the existing snapshot)
         type: boolean
         default: false
+      allow_daytime_refresh:
+        description: Allow this manual source refresh outside overnight hours (180-minute limit)
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -51,15 +55,22 @@ jobs:
         run: python scripts/restore-snapshot.py
       - name: Refresh from public sources
         if: github.event_name == 'schedule' || inputs.refresh_sources
+        env:
+          ALLOW_DAYTIME_REFRESH: ${{ inputs.allow_daytime_refresh }}
         run: |
           python - <<'PYTHON'
           from datetime import datetime, timezone
+          import os
           import subprocess
           import sys
           now = datetime.now(timezone.utc)
           if 4 <= now.hour < 22:
-              sys.exit("Outside overnight scraping window (22:00-04:00 UTC); retain existing data")
-          seconds_left = (4 * 3600 - (now.hour * 3600 + now.minute * 60 + now.second)) % 86400
+              if not (os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and os.environ.get("ALLOW_DAYTIME_REFRESH") == "true"):
+                  sys.exit("Outside overnight scraping window (22:00-04:00 UTC); retain existing data")
+              seconds_left = 180 * 60
+              print("Explicit manual daytime refresh: 180-minute source limit", flush=True)
+          else:
+              seconds_left = (4 * 3600 - (now.hour * 3600 + now.minute * 60 + now.second)) % 86400
           subprocess.run([sys.executable, "scripts/refresh-data.py"], check=True, timeout=seconds_left)
           PYTHON
       - name: Build the validated static snapshot
