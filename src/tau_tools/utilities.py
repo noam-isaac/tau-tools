@@ -2,17 +2,25 @@ import os
 import time
 from typing import Any, Dict, Optional
 from contextlib import nullcontext
+from contextvars import ContextVar
+from concurrent.futures import CancelledError
+from tempfile import NamedTemporaryFile
+from threading import Lock
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
+_cache_locks = {}
+_cache_lock_guard = Lock()
+request_cancelled = ContextVar("request_cancelled", default=None)
 
-def new_session():
+
+def new_session(retry_methods=("GET",)):
     session = requests.Session()
     session.mount("https://", HTTPAdapter(max_retries=Retry(
         total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods={"GET"},
+        allowed_methods=retry_methods,
     )))
     return session
 
@@ -33,6 +41,17 @@ def request(
     else:
         cache_file = f"cache-{cache_category}/{cache_key}.txt"
 
+    # Share a cache miss across workers, while leaving unrelated requests parallel.
+    with _cache_lock_guard:
+        lock = _cache_locks.setdefault(os.path.abspath(cache_file), Lock()) if cache_key is not None else nullcontext()
+    with lock:
+        return _request(method, url, s, delay, json, data, headers, cache_key, cache_file)
+
+
+def _request(method, url, s, delay, json, data, headers, cache_key, cache_file):
+    stop = request_cancelled.get()
+    if stop is not None and stop.is_set():
+        raise CancelledError("Refresh stopped after another source failure")
     if (
         cache_key is not None
         and os.path.exists(cache_file)
@@ -52,10 +71,16 @@ def request(
 
     if cache_key is not None:
         cache_directory = os.path.dirname(os.path.abspath(cache_file))
-        if not os.path.isdir(cache_directory):
-            os.mkdir(cache_directory)
-        with open(cache_file, "w") as f:
-            f.write(response.text)
+        os.makedirs(cache_directory, exist_ok=True)
+        temporary = None
+        try:
+            with NamedTemporaryFile(mode="w", dir=cache_directory, delete=False) as f:
+                temporary = f.name
+                f.write(response.text)
+            os.replace(temporary, cache_file)
+        finally:
+            if temporary is not None and os.path.exists(temporary):
+                os.unlink(temporary)
 
     return response.text
 

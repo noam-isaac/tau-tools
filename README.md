@@ -61,9 +61,18 @@ at 04:00 UTC (06:00/07:00 Israel). This guard also applies to manual source
 refreshes and delayed scheduled jobs. A timeout leaves the previous deployment
 intact. Manual reuse-only publication does not scrape and is not time-restricted.
 
-TAU school searches run sequentially and stop at the first failure. A fresh
-per-run cache reuses repeated exam requests. The pipeline requires complete,
-valid calendar dates for the refreshed year and our saved current semester
+Independent TAU school searches use at most four workers, with serial pagination
+inside each search. Prerequisite lookups also use at most four workers and reuse
+one HTTP session per worker. A failure stops new work and subsequent lookups in
+active workers; in-flight calls finish under the existing timeouts and retries.
+A fresh per-run cache shares repeated exam requests safely.
+The pipeline logs phase durations and prerequisite progress.
+Study-plan inventory is filtered to the requested source year before fetching
+curricula; TAU's list also contains older programs. An explicit zero-row curriculum
+is empty; HTTP failures and other source errors still abort publication.
+Doctoral study plans are excluded; the course and exam catalogs keep their existing scope.
+Read-only GraphQL queries use bounded retries for transient failures; mutations keep POST retries disabled.
+It requires complete, valid calendar dates for the refreshed year and our saved current semester
 before scraping course data. A missing calendar blocks publication rather than
 creating empty dates; our `info.json` determines the app default.
 Schema validation checks the fields consumed by Dib It, including nested exam,

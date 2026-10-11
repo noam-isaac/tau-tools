@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from tau_tools.logging import log, progress, setup_logging
-from tau_tools.utilities import request
+from tau_tools.utilities import new_session, request
 
 
 def request_graphql(
@@ -19,6 +19,7 @@ def request_graphql(
     api_url="https://tochniot.tau.ac.il/graphql",
     delay=1,
     cache_key: Optional[str] = None,
+    allow_empty=False,
 ):
     """
     Send a GraphQL request to the `api_url`.
@@ -26,14 +27,20 @@ def request_graphql(
     Sleep for `delay` seconds, to prevent overwhelming anything.
     """
 
-    response = request(
-        "post",
-        api_url,
-        json=request_json,
-        cache_category="plans",
-        cache_key=cache_key,
-        delay=delay,
-    )
+    # These GraphQL queries are read-only despite using POST. Keep mutation
+    # retries disabled, while using the existing bounded retry policy for reads.
+    query = request_json.get("query", "") if isinstance(request_json, dict) else ""
+    methods = ("GET", "POST") if isinstance(query, str) and query.lstrip().startswith("query ") else ("GET",)
+    with new_session(retry_methods=methods) as session:
+        response = request(
+            "post",
+            api_url,
+            session,
+            json=request_json,
+            cache_category="plans",
+            cache_key=cache_key,
+            delay=delay,
+        )
     result = json.loads(response)["data"]
 
     if (
@@ -42,7 +49,10 @@ def request_graphql(
         and "Tau" in result["results"]["body"]
         and "errmsgeng" in result["results"]["body"]["Tau"]
     ):
-        raise Exception(result["results"]["body"]["Tau"]["errmsgeng"])
+        error = result["results"]["body"]["Tau"]
+        if allow_empty and (error.get("status"), error.get("numrows"), error["errmsgeng"]) == ("001", "0", "No data"):
+            return {"results": {"body": []}}
+        raise Exception(error["errmsgeng"])
 
     return result
 
@@ -135,8 +145,8 @@ def get_schools() -> List[SchoolInfo]:
     ]
 
 
-def get_plans(school: SchoolInfo) -> List[PlanInfo]:
-    """Get all of the available plans at the specified school."""
+def get_plans(school: SchoolInfo, year=None, exclude_doctoral=False) -> List[PlanInfo]:
+    """Get the school's plans, optionally limited to their advertised source year."""
 
     plans = request_graphql(
         {
@@ -190,6 +200,8 @@ def get_plans(school: SchoolInfo) -> List[PlanInfo]:
             result["egedid"],
         )
         for result in plans["getPrograms"]["results"]
+        if year is None or result["shana"] == str(year)
+        if not exclude_doctoral or result["toar"] != "שלישי"
     ]
 
 
@@ -209,8 +221,11 @@ def get_plan(plan: PlanInfo, year=2024) -> Dict[str, Any]:
             "query": "query results($apiUrl: String!, $filters: JSON!) {\n  results(apiUrl: $apiUrl, filters: $filters) {\n    body\n    __typename\n  }\n}\n",
         },
         cache_key=f"plan-{year}-{plan.id}-{plan.language}",
+        allow_empty=True,
     )
 
+    if details["results"]["body"] == []:
+        return {}
     categories = {}
 
     for part in details["results"]["body"][0]["rama"]:
@@ -266,7 +281,7 @@ def get_plan(plan: PlanInfo, year=2024) -> Dict[str, Any]:
     return categories
 
 
-def main(output_file_template="plans-{year}.json", year=2024, strict=False):
+def main(output_file_template="plans-{year}.json", year=2024, strict=False, exclude_doctoral=False):
     result = {}
 
     schools = get_schools()
@@ -276,7 +291,8 @@ def main(output_file_template="plans-{year}.json", year=2024, strict=False):
         )
         for school in schools:
             result[school.name] = {}
-            plans = [plan for plan in get_plans(school) if plan.id is not None]
+            plans = [plan for plan in get_plans(school, year=year if strict else None,
+                                               exclude_doctoral=exclude_doctoral) if plan.id is not None]
             school_task_id = progress.add_task(
                 f"[green]Fetching school '{school.name}' plans...", total=len(plans)
             )
@@ -287,6 +303,7 @@ def main(output_file_template="plans-{year}.json", year=2024, strict=False):
                         result[school.name][plan.name] = plan_details
                 except Exception as e:
                     if strict:
+                        print(f"{year + 1} study plan {school.name}/{plan.name} ({plan.id}): {e}", flush=True)
                         raise
                     log.warning(
                         f"Error fetching {plan.name} in {school.name}: [red]{e}[/red]",
