@@ -4,6 +4,7 @@ import copy
 import os
 import runpy
 import json
+import subprocess
 import textwrap
 from datetime import datetime, timezone
 from dataclasses import replace
@@ -332,8 +333,16 @@ print('Direct prerequisite and plan checks passed')
 workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/scrape.yml').read_text()
 assert "cron: '23 22 * * 6'" in workflow
 night_guard = textwrap.dedent(workflow.split("python - <<'PYTHON'\n", 1)[1].split('          PYTHON', 1)[0])
-for hour, allowed, seconds in [(21, False, None), (22, True, 21600), (0, True, 14400), (3, True, 3600), (4, False, None)]:
-    with patch('datetime.datetime') as clock, patch('subprocess.run') as run:
+for event, override, hour, allowed, seconds in [
+    *[('schedule', 'false', hour, allowed, seconds) for hour, allowed, seconds in
+      [(21, False, None), (22, True, 21600), (0, True, 14400), (3, True, 3600), (4, False, None)]],
+    ('schedule', 'true', 11, False, None),
+    ('workflow_dispatch', 'false', 11, False, None),
+    ('workflow_dispatch', '', 11, False, None),
+    ('workflow_dispatch', 'true', 11, True, 10800),
+    ('workflow_dispatch', 'true', 3, True, 3600),
+]:
+    with patch.dict(os.environ, {'GITHUB_EVENT_NAME': event, 'ALLOW_DAYTIME_REFRESH': override}), patch('datetime.datetime') as clock, patch('subprocess.run') as run:
         clock.now.return_value = datetime(2026, 9, 26, hour, tzinfo=timezone.utc)
         try:
             exec(compile(night_guard, '<workflow overnight guard>', 'exec'), {})
@@ -343,9 +352,19 @@ for hour, allowed, seconds in [(21, False, None), (22, True, 21600), (0, True, 1
             assert allowed
         if allowed:
             assert run.call_count == 1 and run.call_args.kwargs['timeout'] == seconds
+            assert run.call_args.kwargs['check'] is True
         else:
             run.assert_not_called()
-print('Weekly overnight window checks passed')
+for failure in [subprocess.TimeoutExpired(['scraper'], 10800), subprocess.CalledProcessError(1, ['scraper'])]:
+    with patch.dict(os.environ, {'GITHUB_EVENT_NAME': 'workflow_dispatch', 'ALLOW_DAYTIME_REFRESH': 'true'}), patch('datetime.datetime') as clock, patch('subprocess.run', side_effect=failure):
+        clock.now.return_value = datetime(2026, 10, 11, 11, tzinfo=timezone.utc)
+        try:
+            exec(compile(night_guard, '<workflow daytime guard>', 'exec'), {})
+        except type(failure):
+            pass
+        else:
+            raise AssertionError('Manual refresh failures must still block publication')
+print('Weekly overnight window and explicit manual daytime checks passed')
 
 # Parallel output stays ordered and cannot exceed four active lookups.
 from concurrent.futures import ThreadPoolExecutor
